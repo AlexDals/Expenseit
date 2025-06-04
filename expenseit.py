@@ -295,7 +295,7 @@ if tab_choice == "Add Expenses":
                                 'file_type': 'pdf'
                             }
                             
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.error("Could not extract text from PDF. Please try with a different file.")
             
@@ -332,7 +332,7 @@ if tab_choice == "Add Expenses":
                                 'file_type': 'image'
                             }
                             
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.error("Could not extract text from image. Please try with a clearer image.")
     
@@ -443,12 +443,12 @@ if tab_choice == "Add Expenses":
                     # Clear temp data
                     if hasattr(st.session_state, 'temp_expense'):
                         del st.session_state.temp_expense
-                    st.experimental_rerun()
+                    st.rerun()
                 
                 if clear:
                     if hasattr(st.session_state, 'temp_expense'):
                         del st.session_state.temp_expense
-                    st.experimental_rerun()
+                    st.rerun()
             
             # Show extracted text
             with st.expander("View Extracted Text"):
