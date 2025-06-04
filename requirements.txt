@@ -1,5 +1,8 @@
 streamlit
-pytesseract
-pillow
-pymupdf
 pandas
+pytesseract
+Pillow
+openpyxl
+PyMuPDF
+pdf2image
+poppler-utils
