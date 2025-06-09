@@ -75,14 +75,20 @@ def extract_text_from_file(uploaded_file):
 
 
 # --- IMPROVED REGEX PARSING ---
+# In utils/ocr_utils.py, replace the parse_ocr_text function with this one.
+# The other functions (preprocess_image, extract_text_from_file) stay the same.
+
 def parse_ocr_text(text: str):
     """
-    Parses the OCR text to find key fields using more robust regular expressions.
+    Parses the OCR text to find key fields, now including Canadian taxes.
     """
     parsed_data = {
         "vendor": "N/A",
         "date": "N/A",
         "total_amount": 0.0,
+        "gst_amount": 0.0,
+        "pst_amount": 0.0,
+        "hst_amount": 0.0,
     }
 
     # Vendor: Try to get the first non-empty line
@@ -96,20 +102,44 @@ def parse_ocr_text(text: str):
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
 
-    # Total Amount: Look for lines containing "Total", "Amount", etc., and find the largest number on that line.
-    total_pattern = r'(?i)^(.*(total|amount|montant|payé)[\w\s:]*)\s*([$€£]?\s*\d+[,.]\d{2})$'
+    # Generic function to find tax value on a line
+    def find_tax_value(line, keywords):
+        for keyword in keywords:
+            if re.search(r'\b' + keyword + r'\b', line, re.IGNORECASE):
+                match = re.search(r'([$€£]?\s*\d+[.,]\d{2})', line)
+                if match:
+                    try:
+                        amount_str = match.group(1).replace('$', '').replace('€', '').replace('£', '').replace(',', '').strip()
+                        return float(amount_str)
+                    except (ValueError, IndexError):
+                        continue
+        return None
+
     amount_candidates = []
     for line in text.split('\n'):
-        match = re.search(r'([$€£]?\s*\d+[.,]\d{2})', line)
-        if match and ("total" in line.lower() or "amount" in line.lower() or "payé" in line.lower()):
-            try:
-                # Clean up the number string and convert to float
-                amount_str = match.group(1).replace('$', '').replace('€', '').replace('£', '').replace(',', '').strip()
-                amount_candidates.append(float(amount_str))
-            except ValueError:
-                continue
+        # Find Tax Amounts
+        gst_val = find_tax_value(line, ["GST", "TPS", "G.S.T."])
+        if gst_val is not None:
+            parsed_data["gst_amount"] = gst_val
+
+        pst_val = find_tax_value(line, ["PST", "QST", "TVP", "P.S.T."])
+        if pst_val is not None:
+            parsed_data["pst_amount"] = pst_val
+
+        hst_val = find_tax_value(line, ["HST", "TVH", "H.S.T."])
+        if hst_val is not None:
+            parsed_data["hst_amount"] = hst_val
+
+        # Find Total Amount (existing logic, finds the largest amount on a 'total' line)
+        if match := re.search(r'([$€£]?\s*\d+[.,]\d{2})', line):
+            if "total" in line.lower() or "amount" in line.lower() or "payé" in line.lower():
+                try:
+                    amount_str = match.group(1).replace('$', '').replace('€', '').replace('£', '').replace(',', '').strip()
+                    amount_candidates.append(float(amount_str))
+                except ValueError:
+                    continue
     
     if amount_candidates:
-        parsed_data["total_amount"] = max(amount_candidates) # Assume the largest value is the total
+        parsed_data["total_amount"] = max(amount_candidates)
 
     return parsed_data
