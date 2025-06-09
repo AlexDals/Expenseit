@@ -33,9 +33,14 @@ def get_structured_data_from_image(image_bytes) -> pd.DataFrame:
     data_df = data_df[data_df.text != '']
     return data_df
 
-# --- NEW PARSING LOGIC: GEOMETRIC ANALYSIS ---
+# In utils/ocr_utils.py, replace the existing parse_invoice_with_geometry function.
+# The other functions in the file do not need to change.
+
 def parse_invoice_with_geometry(df_list: list[pd.DataFrame]):
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
+    
+    if not df_list: return parsed_data
+    
     full_df = pd.concat(df_list, ignore_index=True)
     full_df['text_lower'] = full_df['text'].str.lower()
 
@@ -46,67 +51,85 @@ def parse_invoice_with_geometry(df_list: list[pd.DataFrame]):
 
     # --- Find Keywords and their Coordinates ---
     def find_keyword_area(df, keywords):
-        """Finds the area of the first matching keyword."""
         for keyword in keywords:
             keyword_df = df[df['text_lower'].str.contains(keyword, na=False)]
             if not keyword_df.empty:
-                # Get the first match
                 k = keyword_df.iloc[0]
                 return (k['left'], k['top'], k['left'] + k['width'], k['top'] + k['height'])
         return None
 
-    # Define keywords for each header
-    federal_tax_keywords = ["federal", "fédérale", "gst", "tps"]
-    provincial_tax_keywords = ["provincial", "provinciale", "qst", "tvq"]
-    total_keywords = ["total payable", "total à payer", "invoice total"]
-
-    # Get the coordinates for the headers
-    federal_header_area = find_keyword_area(full_df, federal_tax_keywords)
-    provincial_header_area = find_keyword_area(full_df, provincial_tax_keywords)
-    total_header_area = find_keyword_area(full_df, total_keywords)
-
     # --- Associate values to headers based on vertical alignment ---
-    def find_best_match_in_column(header_area, candidates_df):
-        if not header_area:
-            return 0.0
-        
+    def find_value_in_column(header_area, candidates_df):
+        if not header_area: return 0.0, None
         x_min, y_min, x_max, _ = header_area
         col_center = x_min + (x_max - x_min) / 2
         
-        best_match = 0.0
+        best_match_row = None
         smallest_distance = float('inf')
 
-        for _, row in candidates_df.iterrows():
-            # Check if the number is below the header
+        for index, row in candidates_df.iterrows():
             if row['top'] > y_min:
-                # Check horizontal alignment (center of number within column bounds)
                 row_center = row['left'] + row['width'] / 2
-                if abs(row_center - col_center) < (row['width'] / 2 + (x_max - x_min) / 2 + 25): # 25px tolerance
-                    # Find the closest match vertically
+                if abs(row_center - col_center) < (row['width'] / 2 + (x_max - x_min) / 2 + 35): # 35px tolerance
                     vertical_distance = row['top'] - y_min
                     if vertical_distance < smallest_distance:
                         smallest_distance = vertical_distance
-                        best_match = row['amount']
-        return best_match
+                        best_match_row = row
+        
+        return (best_match_row['amount'], best_match_row) if best_match_row is not None else (0.0, None)
 
-    # Find taxes by looking in the column below the headers
-    parsed_data["gst_amount"] = find_best_match_in_column(federal_header_area, money_df)
-    parsed_data["pst_amount"] = find_best_match_in_column(provincial_header_area, money_df)
-    parsed_data["total_amount"] = find_best_match_in_column(total_header_area, money_df)
+    # --- UPDATED BILINGUAL KEYWORD LISTS ---
+    federal_tax_keywords = ["federal", "fédérale", "gst", "tps"]
+    provincial_tax_keywords = ["provincial", "provinciale", "pst", "rst", "qst", "tvp", "tvd", "tvq"]
+    hst_keywords = ["hst", "tvh"]
+    total_keywords = ["total payable", "total à payer", "invoice total", "total de la facture"]
+
+    # Find coordinates of headers
+    federal_coords = find_keyword_area(full_df, federal_tax_keywords)
+    provincial_coords = find_keyword_area(full_df, provincial_tax_keywords)
+    hst_coords = find_keyword_area(full_df, hst_keywords)
+    total_coords = find_keyword_area(full_df, total_keywords)
+    
+    # Find values in those columns
+    gst_amount, gst_row = find_value_in_column(federal_coords, money_df)
+    pst_amount, _ = find_value_in_column(provincial_coords, money_df)
+    hst_amount, _ = find_value_in_column(hst_coords, money_df)
+    total_amount, _ = find_value_in_column(total_coords, money_df)
+    
+    # Assign found values
+    parsed_data["gst_amount"] = gst_amount
+    parsed_data["pst_amount"] = pst_amount
+    parsed_data["hst_amount"] = hst_amount
+    parsed_data["total_amount"] = total_amount
+
+    # Heuristic: If we found HST, GST/PST should be zero
+    if hst_amount > 0:
+        parsed_data["gst_amount"] = 0.0
+        parsed_data["pst_amount"] = 0.0
+
+    # Heuristic: Find second tax based on position of first tax (if provincial header was missed)
+    if gst_amount > 0 and pst_amount == 0.0 and gst_row is not None:
+        gst_top = gst_row['top']
+        gst_left = gst_row['left']
+        
+        for _, row in money_df.iterrows():
+            if abs(row['top'] - gst_top) < 10 and row['left'] > gst_left:
+                if row['amount'] != gst_amount and row['amount'] != total_amount:
+                    parsed_data["pst_amount"] = row['amount']
+                    break
 
     # --- Fallbacks and Final Cleanup ---
-    # If column search fails for total, use the largest number found.
     if parsed_data["total_amount"] == 0.0 and not money_df.empty:
         parsed_data["total_amount"] = money_df['amount'].max()
     
-    # Basic info that doesn't need positional analysis
-    for line in " \n ".join(full_df['text'].dropna()).split('\n'):
+    full_text_for_parsing = " \n ".join(full_df['text'].dropna())
+    for line in full_text_for_parsing.split('\n'):
         if line.lower().strip().startswith("sold by / vendu par:"):
             parsed_data["vendor"] = line.split(":", 1)[1].strip()
             break
     
     date_pattern = r'(?i)(?:Date|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4})'
-    if date_match := re.search(date_pattern, " ".join(full_df['text'].dropna())):
+    if date_match := re.search(date_pattern, full_text_for_parsing):
         parsed_data["date"] = date_match.group(1).strip()
 
     return parsed_data
