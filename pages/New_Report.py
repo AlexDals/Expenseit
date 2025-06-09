@@ -38,6 +38,10 @@ if uploaded_receipt is not None:
 else:
     receipt_path_for_db = None
 
+# --- LOGIC CORRECTION IS HERE ---
+# Define the minimum value constant before the form starts.
+min_allowed_value = 0.01
+
 # --- Form for Expense Item Details ---
 with st.form("expense_item_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
@@ -45,4 +49,51 @@ with st.form("expense_item_form", clear_on_submit=True):
         expense_date = st.date_input("Expense Date", value=pd.to_datetime(parsed_data.get("date", date.today()), errors='coerce'))
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
     with col2:
-        min_allowed
+        ocr_amount = float(parsed_data.get("total_amount", 0.0))
+        initial_value = max(min_allowed_value, ocr_amount)
+        
+        amount = st.number_input(
+            "Amount",
+            min_value=min_allowed_value,
+            value=initial_value,
+            format="%.2f"
+        )
+        
+        description = st.text_area("Description")
+        
+    submitted_item = st.form_submit_button("Add Item to Report")
+
+    if submitted_item and vendor and amount > 0:
+        new_item = {
+            "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
+            "receipt_path": receipt_path_for_db,
+            "ocr_text": ocr_raw_text if uploaded_receipt and 'ocr_raw_text' in locals() else None
+        }
+        st.session_state.current_report_items.append(new_item)
+        st.success(f"Added: {vendor} - ${amount:.2f}")
+
+if st.session_state.current_report_items:
+    st.markdown("---")
+    st.subheader("Current Report Items")
+    items_df = pd.DataFrame(st.session_state.current_report_items)
+    st.dataframe(items_df[['date', 'vendor', 'description', 'amount']])
+    total_report_amount = items_df['amount'].sum()
+    st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
+
+    if st.button("Submit Entire Report", type="primary"):
+        if not report_name:
+            st.error("Please provide a Report Name before submitting.")
+        else:
+            with st.spinner("Submitting report..."):
+                report_id = su.add_report(user_id, report_name, total_report_amount)
+                if report_id:
+                    for item in st.session_state.current_report_items:
+                        su.add_expense_item(
+                            report_id, item['date'], item['vendor'], item['description'], item['amount'],
+                            item.get('receipt_path'), item.get('ocr_text')
+                        )
+                    st.success(f"Report '{report_name}' submitted successfully!")
+                    st.session_state.current_report_items = []
+                    st.rerun()
+                else:
+                    st.error("Failed to create report entry in database.")
