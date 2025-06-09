@@ -1,3 +1,3 @@
 tesseract-ocr
-tesseract-ocr-eng # Example: English language pack, add others if needed (e.g., tesseract-ocr-fra for French)
+tesseract-ocr-eng
 tesseract-ocr-fra
