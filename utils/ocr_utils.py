@@ -5,9 +5,9 @@ import re
 import fitz  # PyMuPDF
 import cv2  # OpenCV
 import numpy as np
-from itertools import combinations
+import pandas as pd
 
-# --- IMAGE PREPROCESSING AND TEXT EXTRACTION (No changes) ---
+# --- IMAGE PREPROCESSING (No changes) ---
 def preprocess_image(image_bytes):
     img_array = np.frombuffer(image_bytes, np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
@@ -17,117 +17,134 @@ def preprocess_image(image_bytes):
     _, processed_img_bytes = cv2.imencode('.png', thresh)
     return processed_img_bytes.tobytes()
 
-def extract_text_from_file(uploaded_file):
-    try:
-        file_bytes = uploaded_file.getvalue()
-        full_text = ""
-        custom_config = r'--oem 3 --psm 4'
-        if uploaded_file.type == "application/pdf":
-            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                for page_num, page in enumerate(doc):
-                    pix = page.get_pixmap(dpi=300)
-                    img_bytes = pix.tobytes("png")
-                    processed_bytes = preprocess_image(img_bytes)
-                    image = Image.open(io.BytesIO(processed_bytes))
-                    page_text = pytesseract.image_to_string(image, config=custom_config)
-                    full_text += page_text + f"\n--- Page {page_num+1} ---\n"
-            return full_text
-        elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
-            processed_bytes = preprocess_image(file_bytes)
-            image = Image.open(io.BytesIO(processed_bytes))
-            return pytesseract.image_to_string(image, config=custom_config)
-        else:
-            return "Unsupported file type."
-    except Exception as e:
-        return f"Error during OCR processing: {str(e)}"
-
-# --- FINAL PARSING LOGIC v8 ---
-def _find_amount_from_lines(lines, keywords):
-    """Helper to find the first amount on a line matching keywords, searching backwards."""
-    for line in reversed(lines):
-        if any(keyword in line.lower() for keyword in keywords):
-            # Find the largest number on that line
-            amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
-            if amounts:
-                return max(amounts)
-    return 0.0
-
-def parse_ocr_text(text: str):
-    parsed_data = {
-        "vendor": "N/A", "date": "N/A", "total_amount": 0.0,
-        "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0,
-    }
-
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+# --- NEW CORE OCR FUNCTION: GETS DATAFRAME WITH COORDINATES ---
+def get_structured_data_from_image(image_bytes) -> pd.DataFrame:
+    processed_bytes = preprocess_image(image_bytes)
+    image = Image.open(io.BytesIO(processed_bytes))
     
-    # --- Stage 1: Basic Field Extraction ---
-    if lines:
-        for line in lines:
-            if line.lower().startswith("sold by / vendu par:"):
-                parsed_data["vendor"] = line.split(":", 1)[1].strip()
-                break
-        if parsed_data["vendor"] == "N/A" and len(lines[0]) < 50:
-            parsed_data["vendor"] = lines[0]
+    # Use image_to_data to get bounding boxes. PSM 3 or 11 are good for this.
+    config = r'--oem 3 --psm 3'
+    data_df = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DATAFRAME)
+    
+    # Clean up the DataFrame
+    data_df = data_df[data_df.conf > 40] # Keep words with confidence > 40
+    data_df['text'] = data_df['text'].str.strip()
+    data_df = data_df.dropna(subset=['text'])
+    data_df = data_df[data_df.text != '']
+    return data_df
 
-    date_pattern = r'(?i)(?:Date|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4})'
-    date_match = re.search(date_pattern, text)
-    if date_match: parsed_data["date"] = date_match.group(1).strip()
+# --- NEW PARSING LOGIC: GEOMETRIC ANALYSIS ---
+def parse_invoice_with_geometry(df_list: list[pd.DataFrame]):
+    parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
+    full_df = pd.concat(df_list, ignore_index=True)
+    full_df['text_lower'] = full_df['text'].str.lower()
 
-    # --- Stage 2: Find Anchors (Total and Subtotal) using Reverse Search ---
+    # --- Find Monetary Values ---
+    money_pattern = r'^\$?(\d{1,3}(?:,\d{3})*[.,]\d{2})$'
+    money_df = full_df[full_df['text'].str.match(money_pattern, na=False)].copy()
+    money_df['amount'] = money_df['text'].str.replace(r'[$,]', '', regex=True).astype(float)
+
+    # --- Find Keywords and their Coordinates ---
+    def find_keyword_area(df, keywords):
+        """Finds the area of the first matching keyword."""
+        for keyword in keywords:
+            keyword_df = df[df['text_lower'].str.contains(keyword, na=False)]
+            if not keyword_df.empty:
+                # Get the first match
+                k = keyword_df.iloc[0]
+                return (k['left'], k['top'], k['left'] + k['width'], k['top'] + k['height'])
+        return None
+
+    # Define keywords for each header
+    federal_tax_keywords = ["federal", "fédérale", "gst", "tps"]
+    provincial_tax_keywords = ["provincial", "provinciale", "qst", "tvq"]
     total_keywords = ["total payable", "total à payer", "invoice total"]
-    subtotal_keywords = ["subtotal", "sous-total", "total partiel"]
+
+    # Get the coordinates for the headers
+    federal_header_area = find_keyword_area(full_df, federal_tax_keywords)
+    provincial_header_area = find_keyword_area(full_df, provincial_tax_keywords)
+    total_header_area = find_keyword_area(full_df, total_keywords)
+
+    # --- Associate values to headers based on vertical alignment ---
+    def find_best_match_in_column(header_area, candidates_df):
+        if not header_area:
+            return 0.0
+        
+        x_min, y_min, x_max, _ = header_area
+        col_center = x_min + (x_max - x_min) / 2
+        
+        best_match = 0.0
+        smallest_distance = float('inf')
+
+        for _, row in candidates_df.iterrows():
+            # Check if the number is below the header
+            if row['top'] > y_min:
+                # Check horizontal alignment (center of number within column bounds)
+                row_center = row['left'] + row['width'] / 2
+                if abs(row_center - col_center) < (row['width'] / 2 + (x_max - x_min) / 2 + 25): # 25px tolerance
+                    # Find the closest match vertically
+                    vertical_distance = row['top'] - y_min
+                    if vertical_distance < smallest_distance:
+                        smallest_distance = vertical_distance
+                        best_match = row['amount']
+        return best_match
+
+    # Find taxes by looking in the column below the headers
+    parsed_data["gst_amount"] = find_best_match_in_column(federal_header_area, money_df)
+    parsed_data["pst_amount"] = find_best_match_in_column(provincial_header_area, money_df)
+    parsed_data["total_amount"] = find_best_match_in_column(total_header_area, money_df)
+
+    # --- Fallbacks and Final Cleanup ---
+    # If column search fails for total, use the largest number found.
+    if parsed_data["total_amount"] == 0.0 and not money_df.empty:
+        parsed_data["total_amount"] = money_df['amount'].max()
     
-    grand_total = _find_amount_from_lines(lines, total_keywords)
-    subtotal = _find_amount_from_lines(lines, subtotal_keywords)
+    # Basic info that doesn't need positional analysis
+    for line in " \n ".join(full_df['text'].dropna()).split('\n'):
+        if line.lower().strip().startswith("sold by / vendu par:"):
+            parsed_data["vendor"] = line.split(":", 1)[1].strip()
+            break
     
-    all_numbers = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)]
-    if grand_total == 0.0 and all_numbers: grand_total = max(all_numbers)
-    # If subtotal logic picked up the grand total, find the next largest number
-    if subtotal == grand_total and all_numbers:
-        smaller_numbers = sorted([n for n in all_numbers if n < grand_total], reverse=True)
-        if smaller_numbers:
-            subtotal = smaller_numbers[0]
+    date_pattern = r'(?i)(?:Date|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4})'
+    if date_match := re.search(date_pattern, " ".join(full_df['text'].dropna())):
+        parsed_data["date"] = date_match.group(1).strip()
 
-    parsed_data["total_amount"] = grand_total
-
-    # --- Stage 3: Mathematical Validation ---
-    tax_candidates = sorted([n for n in all_numbers if n not in [grand_total, subtotal] and 0 < n < subtotal], reverse=True)
-    validated_taxes = []
-
-    if subtotal > 0 and grand_total > subtotal and tax_candidates:
-        for i in range(1, 4): # Look for combinations of 1, 2, or 3 taxes
-            for combo in combinations(tax_candidates, i):
-                if abs((subtotal + sum(combo)) - grand_total) < 0.02:
-                    validated_taxes = sorted(list(combo))
-                    break
-            if validated_taxes:
-                break
-
-    # --- Stage 4: Label Validated Taxes ---
-    if validated_taxes:
-        # For now, use a simple heuristic: smallest is GST, next is PST.
-        # This can be improved later with positional context if needed.
-        if len(validated_taxes) == 1:
-            parsed_data["hst_amount"] = validated_taxes[0]
-        if len(validated_taxes) >= 1:
-            parsed_data["gst_amount"] = validated_taxes.pop(0)
-        if len(validated_taxes) >= 1:
-            parsed_data["pst_amount"] = validated_taxes.pop(0)
-            
     return parsed_data
 
 # --- Main Entry Point Function (UPDATED) ---
 def extract_and_parse_file(uploaded_file):
     """
-    Orchestrates OCR and parsing. Now returns both raw text and parsed data.
+    Top-level function that orchestrates the entire positional OCR pipeline.
     """
     try:
-        raw_text = extract_text_from_file(uploaded_file)
-        if "Error" in raw_text or "Unsupported" in raw_text:
-             return raw_text, {"error": raw_text}
+        file_bytes = uploaded_file.getvalue()
+        df_list = []
+        raw_text = ""
+
+        # Process file (image or PDF) into a list of DataFrames (one per page)
+        if uploaded_file.type == "application/pdf":
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page in doc:
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    page_df = get_structured_data_from_image(img_bytes)
+                    df_list.append(page_df)
+        elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
+            page_df = get_structured_data_from_image(file_bytes)
+            df_list.append(page_df)
+        else:
+            return "Unsupported file type", {"error": "Unsupported file type"}
         
-        parsed_data = parse_ocr_text(raw_text)
-        return raw_text, parsed_data # Return both
+        if not df_list:
+            return "No text could be extracted.", {"error": "Could not extract any data from the file."}
+
+        # Combine raw text from all pages for display
+        for df in df_list:
+            raw_text += " \n ".join(df['text'].dropna()) + "\n--- Page ---\n"
+            
+        # Parse the structured data
+        parsed_data = parse_invoice_with_geometry(df_list)
+        return raw_text, parsed_data
         
     except Exception as e:
         error_message = f"A critical error occurred in the OCR pipeline: {str(e)}"
