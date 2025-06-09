@@ -31,6 +31,7 @@ receipt_path_for_db = None
 
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
+        # --- FIX: This line now correctly unpacks the two values from the utility function ---
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
 
         with st.expander("View Raw Extracted Text"):
@@ -46,6 +47,7 @@ if uploaded_receipt is not None:
         if receipt_path_for_db: st.success("Receipt uploaded successfully!")
         else: st.error("Failed to upload receipt.")
 else:
+    # Initialize with a default structure if no file is uploaded
     parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
 
 min_allowed_value = 0.01
