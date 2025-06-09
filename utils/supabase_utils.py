@@ -2,6 +2,7 @@ import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
 from datetime import datetime
+import os
 
 @st.cache_resource
 def init_connection() -> Client:
@@ -10,7 +11,7 @@ def init_connection() -> Client:
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found in secrets. Please add them.")
+        st.error("Supabase credentials not found in secrets.toml. Please add them.")
         st.stop()
 
 supabase = init_connection()
@@ -56,36 +57,30 @@ def get_user_id_by_username(username: str) -> str | None:
         st.error(f"Error fetching user ID: {e}")
         return None
 
-# Replace the existing upload_receipt function in supabase_utils.py with this one.
-
-import os # Make sure to import 'os' at the top of the file
-
+# --- FUNCTION CORRECTED HERE ---
 def upload_receipt(uploaded_file, username: str) -> str | None:
     """Uploads a receipt file (image or PDF) to Supabase Storage."""
     try:
-        # Get the file bytes
         file_bytes = uploaded_file.getvalue()
-        
-        # Get the original file extension
         file_ext = os.path.splitext(uploaded_file.name)[1]
-        
-        # Generate a unique path for the file
         file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
         
-        # 'receipts' is the name of your public bucket
-        response = supabase.storage.from_("receipts").upload(
+        # Perform the upload. If this fails, the 'except' block will catch the error.
+        supabase.storage.from_("receipts").upload(
             file=file_bytes, 
             path=file_path, 
             file_options={"content-type": uploaded_file.type}
         )
         
-        # Check if upload was successful
-        if response.status_code == 200:
-            return file_path # Store the path, not the full URL
-        return None
+        # If we reach this line without an error, the upload was successful.
+        # We no longer check for a status code.
+        return file_path
+        
     except Exception as e:
+        # If the upload fails, the exception 'e' will contain the error details from Supabase.
         st.error(f"Error uploading receipt: {e}")
         return None
+# --- END OF CORRECTION ---
 
 def add_report(user_id, report_name, total_amount) -> str | None:
     try:
