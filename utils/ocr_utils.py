@@ -48,7 +48,7 @@ def extract_text_from_file(uploaded_file):
         return f"Error during OCR processing: {str(e)}"
 
 
-# --- COMPLETELY REWRITTEN PARSING LOGIC v4 (Mathematical Approach) ---
+# --- COMPLETELY REWRITTEN PARSING LOGIC v5 (Corrected Anchor Finding) ---
 def parse_ocr_text(text: str):
     parsed_data = {
         "vendor": "N/A", "date": "N/A", "total_amount": 0.0,
@@ -60,92 +60,74 @@ def parse_ocr_text(text: str):
     if lines:
         for line in lines:
             if line.lower().startswith("sold by / vendu par:"):
-                parsed_data["vendor"] = line.split(":")[1].strip()
+                parsed_data["vendor"] = line.split(":", 1)[1].strip()
                 break
         if parsed_data["vendor"] == "N/A": parsed_data["vendor"] = lines[0]
 
-    date_pattern = r'(?i)(?:Date|date de la facture|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4}|\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4})'
+    date_pattern = r'(?i)(?:Date|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4}|\d{4}[-/]\d{2}[-/]\d{2}|\d{2}[-/]\d{2}[-/]\d{4})'
     date_match = re.search(date_pattern, text)
     if date_match: parsed_data["date"] = date_match.group(1).strip()
 
-    # --- Stage 2: Extract all numbers and identify key anchors (Total and Subtotal) ---
+    # --- Stage 2: More Careful Anchor Identification (Total and Subtotal) ---
     total_keywords = ["total payable", "total à payer", "invoice total"]
-    subtotal_keywords = ["subtotal", "total partiel", "sous-total"]
-    gst_keywords = ["gst", "tps", "federal tax", "taxe fédérale"]
-    pst_keywords = ["pst", "qst", "tvp", "provincial tax", "taxe provinciale"]
-    hst_keywords = ["hst", "tvh"]
+    subtotal_keywords = ["subtotal", "total partiel", "sous-total de l'article"]
 
     grand_total, subtotal = 0.0, 0.0
-    all_numbers = []
-    
-    # Use finditer to get values and their positions
-    for match in re.finditer(r'[$€£]?\s*(\d+[.,]\d{2})', text):
-        amount = float(match.group(1).replace(',', '.'))
-        all_numbers.append(amount)
-        context_line = ""
-        # Find the full line where the match occurred for context
-        for line in text.split('\n'):
-            if match.group(0) in line:
-                context_line = line.lower()
-                break
-        
-        if any(keyword in context_line for keyword in total_keywords):
-            grand_total = max(grand_total, amount)
-        elif any(keyword in context_line for keyword in subtotal_keywords):
-            subtotal = max(subtotal, amount)
+    all_numbers = [float(m.group(1).replace(',', '.')) for m in re.finditer(r'[$€£]?\s*(\d+[.,]\d{2})', text)]
 
-    # If anchors aren't found, make educated guesses
+    def find_amount_on_line_with_keywords(text_lines, keywords):
+        for line in text_lines:
+            if any(keyword in line.lower() for keyword in keywords):
+                amounts_on_line = [float(m.group(1).replace(',', '.')) for m in re.finditer(r'[$€£]?\s*(\d+[.,]\d{2})', line)]
+                if amounts_on_line:
+                    return max(amounts_on_line)
+        return 0.0
+
+    grand_total = find_amount_on_line_with_keywords(lines, total_keywords)
+    subtotal = find_amount_on_line_with_keywords(lines, subtotal_keywords)
+
+    # Fallback logic if keywords are not found or on different lines
     if grand_total == 0.0 and all_numbers: grand_total = max(all_numbers)
-    if subtotal == 0.0 and all_numbers:
-        # Guess subtotal is the second largest number if available
-        unique_sorted_amounts = sorted(list(set(all_numbers)), reverse=True)
-        if len(unique_sorted_amounts) > 1:
-            subtotal = unique_sorted_amounts[1]
-    
+    # For the Amazon receipt, subtotal is often "(excl. tax)"
+    if subtotal == 0.0:
+        for line in lines:
+            if "(excl. tax)" in line.lower():
+                 amounts = [float(m.group(1).replace(',', '.')) for m in re.finditer(r'[$€£]?\s*(\d+[.,]\d{2})', line)]
+                 if amounts:
+                     subtotal = amounts[0]
+                     break
+
     parsed_data["total_amount"] = grand_total
-    
+
     # --- Stage 3: Mathematical Validation to find tax amounts ---
     tax_candidates = sorted([n for n in all_numbers if n not in [grand_total, subtotal] and n > 0], reverse=True)
     validated_taxes = []
 
-    if subtotal > 0 and grand_total > subtotal:
+    if subtotal > 0 and grand_total > subtotal and tax_candidates:
         for i in range(1, len(tax_candidates) + 1):
             for combo in combinations(tax_candidates, i):
-                # Check if subtotal + combination of taxes is close to the total
                 if abs((subtotal + sum(combo)) - grand_total) < 0.02:
-                    validated_taxes = list(combo)
+                    validated_taxes = sorted(list(combo))
                     break
             if validated_taxes:
                 break
     
     # --- Stage 4: Label the validated taxes using context ---
     if validated_taxes:
-        unassigned_taxes = list(validated_taxes)
-        for tax_val in validated_taxes:
-            # Find the original line for this tax value to check its context
-            for line in text.split('\n'):
-                if str(f"{tax_val:.2f}").replace('.', r'\.') in line.replace(',', '.'):
-                    line_lower = line.lower()
-                    # Check for HST first (exclusive)
-                    if any(keyword in line_lower for keyword in hst_keywords):
-                        parsed_data["hst_amount"] = tax_val
-                        if tax_val in unassigned_taxes: unassigned_taxes.remove(tax_val)
-                        break
-                    # Check for GST
-                    if any(keyword in line_lower for keyword in gst_keywords):
-                        parsed_data["gst_amount"] = tax_val
-                        if tax_val in unassigned_taxes: unassigned_taxes.remove(tax_val)
-                        break
-                    # Check for PST
-                    if any(keyword in line_lower for keyword in pst_keywords):
-                        parsed_data["pst_amount"] = tax_val
-                        if tax_val in unassigned_taxes: unassigned_taxes.remove(tax_val)
-                        break
-        # Heuristic for documents where taxes are listed without keywords on the same line
-        # It assumes the smaller tax is GST and the larger is PST if they are unlabeled
-        if len(unassigned_taxes) == 2 and parsed_data["hst_amount"] == 0.0:
-            unassigned_taxes.sort()
-            parsed_data["gst_amount"] = unassigned_taxes[0]
-            parsed_data["pst_amount"] = unassigned_taxes[1]
+        gst_keywords = ["gst", "tps", "federal tax"]
+        pst_keywords = ["pst", "qst", "tvp", "provincial tax"]
+        hst_keywords = ["hst", "tvh"]
+
+        # This heuristic assumes on Canadian receipts that GST is usually listed before/is smaller than PST
+        # This is not always true but is a reasonable default for unlabeled numbers
+        if len(validated_taxes) == 1:
+            # If only one tax, it could be GST or HST. We check for HST keywords first.
+            if any(keyword in text.lower() for keyword in hst_keywords):
+                parsed_data["hst_amount"] = validated_taxes[0]
+            else:
+                parsed_data["gst_amount"] = validated_taxes[0]
+        elif len(validated_taxes) == 2:
+            parsed_data["gst_amount"] = validated_taxes[0] # Smaller tax
+            parsed_data["pst_amount"] = validated_taxes[1] # Larger tax
     
     return parsed_data
