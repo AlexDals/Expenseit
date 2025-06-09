@@ -31,14 +31,25 @@ else:
         expenses_df = su.get_expenses_for_report(selected_report_id)
         if not expenses_df.empty:
             expenses_df['receipt_image'] = expenses_df['receipt_path'].apply(su.get_receipt_public_url)
+            
+            # Define columns to display, including new tax columns
+            display_cols = [
+                "expense_date", "vendor", "description", 
+                "gst_amount", "pst_amount", "hst_amount", 
+                "amount", "receipt_image"
+            ]
+            
             st.dataframe(
                 expenses_df,
                 column_config={
-                    "receipt_image": st.column_config.ImageColumn("Receipt", help="Receipt Image"),
-                    "amount": st.column_config.NumberColumn("Amount", format="$%.2f"),
+                    "receipt_image": st.column_config.ImageColumn("Receipt"),
+                    "amount": st.column_config.NumberColumn("Total", format="$%.2f"),
+                    "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"),
+                    "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"),
+                    "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f"),
                 },
                 hide_index=True,
-                column_order=("expense_date", "vendor", "description", "amount", "receipt_image")
+                column_order=display_cols
             )
         else:
             st.info("No expense items found for this report.")
