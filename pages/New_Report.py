@@ -20,29 +20,38 @@ if 'current_report_items' not in st.session_state:
 
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Client Trip - June 2025")
 st.subheader("Add Expense Item")
-uploaded_receipt = st.file_uploader("Upload Receipt Image (Optional)", type=["png", "jpg", "jpeg"])
+
+# Allow PDF files in the uploader
+uploaded_receipt = st.file_uploader(
+    "Upload Receipt (Image or PDF)", 
+    type=["png", "jpg", "jpeg", "pdf"]
+)
+
 ocr_text_display = st.empty()
 parsed_data = {}
 receipt_path_for_db = None
 
 if uploaded_receipt is not None:
-    image_bytes = uploaded_receipt.getvalue()
     with st.spinner("Processing OCR and uploading receipt..."):
-        ocr_raw_text = ocr_utils.extract_text_from_image(image_bytes)
-        ocr_text_display.text_area("Extracted OCR Text (Raw)", ocr_raw_text, height=150)
+        # Call the new universal text extraction function
+        ocr_raw_text = ocr_utils.extract_text_from_file(uploaded_receipt)
+        
+        ocr_text_display.text_area("Extracted OCR Text (Raw)", ocr_raw_text, height=200)
         parsed_data = ocr_utils.parse_ocr_text(ocr_raw_text)
-        receipt_path_for_db = su.upload_receipt(image_bytes, username)
-        if receipt_path_for_db: st.success("Receipt uploaded successfully!")
-        else: st.error("Failed to upload receipt.")
+        
+        # The upload function now takes the whole file object
+        receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
+        
+        if receipt_path_for_db: 
+            st.success("Receipt uploaded successfully!")
+        else: 
+            st.error("Failed to upload receipt.")
         st.info("OCR parsing is basic. Please verify the fields below.")
 else:
     receipt_path_for_db = None
 
-# --- LOGIC CORRECTION IS HERE ---
-# Define the minimum value constant before the form starts.
 min_allowed_value = 0.01
 
-# --- Form for Expense Item Details ---
 with st.form("expense_item_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
