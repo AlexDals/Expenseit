@@ -5,7 +5,7 @@ import re
 import fitz  # PyMuPDF
 import cv2  # OpenCV
 import numpy as np
-import pandas as pd
+from itertools import combinations
 
 # --- IMAGE PREPROCESSING AND TEXT EXTRACTION (No changes) ---
 def preprocess_image(image_bytes):
@@ -17,131 +17,102 @@ def preprocess_image(image_bytes):
     _, processed_img_bytes = cv2.imencode('.png', thresh)
     return processed_img_bytes.tobytes()
 
-def get_structured_data_from_image(image_bytes) -> pd.DataFrame:
-    processed_bytes = preprocess_image(image_bytes)
-    image = Image.open(io.BytesIO(processed_bytes))
-    config = r'--oem 3 --psm 3'
-    data_df = pytesseract.image_to_data(image, config=config, output_type=pytesseract.Output.DATAFRAME)
-    data_df = data_df[data_df.conf > 40]
-    data_df['text'] = data_df['text'].str.strip()
-    data_df = data_df.dropna(subset=['text'])
-    data_df = data_df[data_df.text != '']
-    return data_df
+def extract_text_from_file(uploaded_file):
+    try:
+        file_bytes = uploaded_file.getvalue()
+        full_text = ""
+        custom_config = r'--oem 3 --psm 4'
+        if uploaded_file.type == "application/pdf":
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page_num, page in enumerate(doc):
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    processed_bytes = preprocess_image(img_bytes)
+                    image = Image.open(io.BytesIO(processed_bytes))
+                    page_text = pytesseract.image_to_string(image, config=custom_config)
+                    full_text += page_text + f"\n--- Page {page_num+1} ---\n"
+            return full_text
+        elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
+            processed_bytes = preprocess_image(file_bytes)
+            image = Image.open(io.BytesIO(processed_bytes))
+            return pytesseract.image_to_string(image, config=custom_config)
+        else:
+            return "Unsupported file type."
+    except Exception as e:
+        return f"Error during OCR processing: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC ---
-def parse_invoice_with_geometry(df_list: list[pd.DataFrame]):
-    parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
-    
-    if not df_list: return parsed_data
-    
-    full_df = pd.concat(df_list, ignore_index=True)
-    full_df['text_lower'] = full_df['text'].str.lower()
+# --- FINAL, MATHEMATICAL PARSING LOGIC ---
+def parse_ocr_text(text: str):
+    parsed_data = {
+        "vendor": "N/A", "date": "N/A", "total_amount": 0.0,
+        "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0,
+    }
 
-    # --- Find All Monetary Values ---
-    money_pattern = r'^\$?(\d{1,3}(?:,\d{3})*[.,]\d{2})$'
-    money_df = full_df[full_df['text'].str.match(money_pattern, na=False)].copy()
-    money_df['amount'] = money_df['text'].str.replace(r'[$,]', '', regex=True).astype(float)
+    # --- Stage 1: Basic Field Extraction (Vendor & Date) ---
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    if lines:
+        for line in lines:
+            if line.lower().startswith("sold by / vendu par:"):
+                parsed_data["vendor"] = line.split(":", 1)[1].strip()
+                break
+        if parsed_data["vendor"] == "N/A" and len(lines[0]) < 50:
+            parsed_data["vendor"] = lines[0]
 
-    # --- Find Keywords and their Coordinates ---
-    def find_keyword_area(df, keywords):
-        for keyword in keywords:
-            keyword_df = df[df['text_lower'].str.contains(keyword, na=False)]
-            if not keyword_df.empty:
-                k = keyword_df.iloc[0]
-                return (k['left'], k['top'], k['left'] + k['width'], k['top'] + k['height'])
-        return None
-
-    def find_value_in_column(header_area, candidates_df):
-        if not header_area: return 0.0
-        x_min, y_min, x_max, _ = header_area
-        col_center = x_min + (x_max - x_min) / 2
-        best_match = 0.0
-        smallest_distance = float('inf')
-
-        for _, row in candidates_df.iterrows():
-            if row['top'] > y_min:
-                row_center = row['left'] + row['width'] / 2
-                if abs(row_center - col_center) < (row['width'] / 2 + (x_max - x_min) / 2 + 35):
-                    vertical_distance = row['top'] - y_min
-                    if vertical_distance < smallest_distance:
-                        smallest_distance = vertical_distance
-                        best_match = row['amount']
-        return best_match
-
-    # --- Find Anchors and Basic Info ---
-    all_amounts = money_df['amount'].tolist()
-    
-    # Use positional analysis for key values
-    federal_coords = find_keyword_area(full_df, ["federal", "fédérale", "gst", "tps"])
-    total_coords = find_keyword_area(full_df, ["total payable", "payer", "invoice total"])
-    
-    parsed_data["gst_amount"] = find_value_in_column(federal_coords, money_df)
-    parsed_data["total_amount"] = find_value_in_column(total_coords, money_df)
-
-    # Fallback for total if positional search fails
-    if parsed_data["total_amount"] == 0.0 and all_amounts:
-        parsed_data["total_amount"] = max(all_amounts)
-
-    # Find Subtotal by looking for keywords and ensuring it's not the total
-    subtotal = 0.0
-    subtotal_keywords = ["subtotal", "sous-total", "total partiel", "(excl. tax)"]
-    for line in " \n ".join(full_df['text'].dropna()).split('\n'):
-        if any(kw in line.lower() for kw in subtotal_keywords):
-            line_amounts = [float(m.group(1).replace(',', '.')) for m in re.finditer(r'[$€£]?\s*(\d+[.,]\d{2})', line)]
-            for amt in line_amounts:
-                if amt != parsed_data["total_amount"]:
-                    subtotal = max(subtotal, amt)
-
-    # --- NEW: Deductive Reasoning for Missing Tax ---
-    grand_total = parsed_data["total_amount"]
-    gst = parsed_data["gst_amount"]
-
-    if grand_total > 0 and subtotal > 0 and gst > 0 and parsed_data["pst_amount"] == 0.0:
-        # Calculate what the second tax *should* be
-        expected_pst = round(grand_total - subtotal - gst, 2)
-        
-        # Confirm this calculated number actually exists on the receipt to avoid errors
-        if not money_df[abs(money_df['amount'] - expected_pst) < 0.02].empty:
-            parsed_data["pst_amount"] = expected_pst
-            
-    # --- Final Cleanup ---
-    for line in " \n ".join(full_df['text'].dropna()).split('\n'):
-        if line.lower().strip().startswith("sold by / vendu par:"):
-            parsed_data["vendor"] = line.split(":", 1)[1].strip()
-            break
-    
     date_pattern = r'(?i)(?:Date|Invoice Date)[:\s]*(\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4}|\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4})'
-    if date_match := re.search(date_pattern, " ".join(full_df['text'].dropna())):
-        parsed_data["date"] = date_match.group(1).strip()
+    date_match = re.search(date_pattern, text)
+    if date_match: parsed_data["date"] = date_match.group(1).strip()
+
+    # --- Stage 2: Mathematical parsing for Total, Subtotal, and Taxes ---
+    all_amounts = sorted(list(set([float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)])), reverse=True)
+    
+    if len(all_amounts) >= 2:
+        grand_total = all_amounts[0]
+        subtotal = all_amounts[1]
+        
+        parsed_data["total_amount"] = grand_total
+        
+        # Calculate the expected sum of all taxes
+        expected_tax_sum = round(grand_total - subtotal, 2)
+        
+        # Find all other smaller numbers that could be taxes
+        tax_candidates = [amt for amt in all_amounts if amt < subtotal]
+        
+        validated_taxes = []
+        # Find a combination of candidates that adds up to the expected tax sum
+        for i in range(1, len(tax_candidates) + 1):
+            for combo in combinations(tax_candidates, i):
+                if abs(sum(combo) - expected_tax_sum) < 0.02: # 2 cent tolerance
+                    validated_taxes = sorted(list(combo))
+                    break
+            if validated_taxes:
+                break
+        
+        # --- Stage 3: Assign validated taxes ---
+        if validated_taxes:
+            # If one tax found, check if it's HST. Otherwise, assume GST/PST.
+            if len(validated_taxes) == 1:
+                if any(keyword in text.lower() for keyword in ["hst", "tvh"]):
+                     parsed_data["hst_amount"] = validated_taxes[0]
+                else: # Assume it's GST if HST keyword not found
+                     parsed_data["gst_amount"] = validated_taxes[0]
+            # If two taxes found, assume smaller is GST, larger is PST
+            elif len(validated_taxes) == 2:
+                parsed_data["gst_amount"] = validated_taxes[0]
+                parsed_data["pst_amount"] = validated_taxes[1]
 
     return parsed_data
 
 # --- Main Entry Point Function ---
 def extract_and_parse_file(uploaded_file):
+    """Orchestrates OCR and parsing. Returns raw text and parsed data."""
     try:
-        file_bytes = uploaded_file.getvalue()
-        df_list, raw_text = [], ""
-
-        if uploaded_file.type == "application/pdf":
-            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                for page in doc:
-                    pix = page.get_pixmap(dpi=300)
-                    img_bytes = pix.tobytes("png")
-                    df_list.append(get_structured_data_from_image(img_bytes))
-        elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
-            df_list.append(get_structured_data_from_image(file_bytes))
-        else:
-            return "Unsupported file type", {"error": "Unsupported file type"}
+        raw_text = extract_text_from_file(uploaded_file)
+        if "Error" in raw_text or "Unsupported" in raw_text:
+             return raw_text, {"error": raw_text}
         
-        if not df_list:
-            return "No text could be extracted.", {"error": "Could not extract any data from the file."}
-
-        for df in df_list:
-            raw_text += " \n ".join(df['text'].dropna()) + "\n--- Page ---\n"
-            
-        parsed_data = parse_invoice_with_geometry(df_list)
+        parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
         
     except Exception as e:
-        error_message = f"A critical error occurred: {str(e)}"
+        error_message = f"A critical error occurred in the OCR pipeline: {str(e)}"
         return error_message, {"error": error_message}
