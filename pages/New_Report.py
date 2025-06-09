@@ -38,14 +38,32 @@ if uploaded_receipt is not None:
 else:
     receipt_path_for_db = None
 
+# --- Form for Expense Item Details ---
 with st.form("expense_item_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
         expense_date = st.date_input("Expense Date", value=pd.to_datetime(parsed_data.get("date", date.today()), errors='coerce'))
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
     with col2:
-        amount = st.number_input("Amount", min_value=0.01, value=float(parsed_data.get("total_amount", 0.0)), format="%.2f")
+        # --- LOGIC CORRECTION IS HERE ---
+        # 1. Define the minimum allowed value.
+        min_allowed_value = 0.01
+        # 2. Get the amount from OCR, defaulting to 0.0 if not found.
+        ocr_amount = float(parsed_data.get("total_amount", 0.0))
+        # 3. Ensure the initial value is never less than the minimum.
+        initial_value = max(min_allowed_value, ocr_amount)
+        
+        # 4. Create the widget with the safe initial value.
+        amount = st.number_input(
+            "Amount",
+            min_value=min_allowed_value,
+            value=initial_value,
+            format="%.2f"
+        )
+        # --- END OF LOGIC CORRECTION ---
+
         description = st.text_area("Description", height=50)
+        
     submitted_item = st.form_submit_button("Add Item to Report")
 
     if submitted_item and vendor and amount > 0:
