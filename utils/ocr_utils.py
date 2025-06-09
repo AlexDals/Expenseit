@@ -3,16 +3,13 @@ from PIL import Image
 import io
 import re
 
-# On Streamlit Cloud, Tesseract should be installed via packages.txt and available in the PATH.
-# You typically do not need to set pytesseract.tesseract_cmd.
-
 def extract_text_from_image(image_bytes):
     try:
         image = Image.open(io.BytesIO(image_bytes))
-        text = pytesseract.image_to_string(image) # Add lang='eng' or other languages if needed
+        text = pytesseract.image_to_string(image)
         return text
     except Exception as e:
-        return f"Error during OCR: {str(e)}. Ensure Tesseract is installed and in PATH, and language data is available."
+        return f"Error during OCR: {str(e)}"
 
 def parse_ocr_text(text):
     parsed_data = {
