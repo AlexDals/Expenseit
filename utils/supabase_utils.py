@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 import os
 
+# The init_connection function is perfect as is, decorated with cache_resource.
 @st.cache_resource
 def init_connection() -> Client:
     try:
@@ -14,9 +15,12 @@ def init_connection() -> Client:
         st.error("Supabase credentials not found in secrets.toml. Please add them.")
         st.stop()
 
-supabase = init_connection()
+# --- CHANGE 1: REMOVE THE AUTOMATIC CONNECTION ---
+# The line "supabase = init_connection()" that was here has been removed.
+# We will now call init_connection() inside each function instead.
 
 def fetch_all_users_for_auth() -> dict:
+    supabase = init_connection() # Connect when the function is called
     try:
         response = supabase.table('users').select("username, email, name, hashed_password").execute()
         users_data = response.data
@@ -34,6 +38,7 @@ def fetch_all_users_for_auth() -> dict:
         return {"usernames": {}}
 
 def register_user(username, name, email, hashed_password) -> bool:
+    supabase = init_connection() # Connect when the function is called
     try:
         user_exists = supabase.table('users').select('username').eq('username', username).execute().data
         if user_exists:
@@ -50,6 +55,7 @@ def register_user(username, name, email, hashed_password) -> bool:
         return False
 
 def get_user_id_by_username(username: str) -> str | None:
+    supabase = init_connection() # Connect when the function is called
     try:
         response = supabase.table('users').select('id').eq('username', username).execute()
         return response.data[0]['id'] if response.data else None
@@ -57,32 +63,26 @@ def get_user_id_by_username(username: str) -> str | None:
         st.error(f"Error fetching user ID: {e}")
         return None
 
-# --- FUNCTION CORRECTED HERE ---
 def upload_receipt(uploaded_file, username: str) -> str | None:
-    """Uploads a receipt file (image or PDF) to Supabase Storage."""
+    supabase = init_connection() # Connect when the function is called
     try:
         file_bytes = uploaded_file.getvalue()
         file_ext = os.path.splitext(uploaded_file.name)[1]
         file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
         
-        # Perform the upload. If this fails, the 'except' block will catch the error.
         supabase.storage.from_("receipts").upload(
             file=file_bytes, 
             path=file_path, 
             file_options={"content-type": uploaded_file.type}
         )
-        
-        # If we reach this line without an error, the upload was successful.
-        # We no longer check for a status code.
         return file_path
         
     except Exception as e:
-        # If the upload fails, the exception 'e' will contain the error details from Supabase.
         st.error(f"Error uploading receipt: {e}")
         return None
-# --- END OF CORRECTION ---
 
 def add_report(user_id, report_name, total_amount) -> str | None:
+    supabase = init_connection() # Connect when the function is called
     try:
         response = supabase.table('reports').insert({
             "user_id": user_id, "report_name": report_name, "submission_date": datetime.now().isoformat(), "total_amount": total_amount
@@ -93,6 +93,7 @@ def add_report(user_id, report_name, total_amount) -> str | None:
         return None
 
 def add_expense_item(report_id, expense_date, vendor, description, amount, receipt_path=None, ocr_text=None):
+    supabase = init_connection() # Connect when the function is called
     try:
         supabase.table('expenses').insert({
             "report_id": report_id, "expense_date": str(expense_date), "vendor": vendor,
@@ -102,13 +103,16 @@ def add_expense_item(report_id, expense_date, vendor, description, amount, recei
         st.error(f"Error adding expense item: {e}")
 
 def get_reports_for_user(user_id):
+    supabase = init_connection() # Connect when the function is called
     response = supabase.table('reports').select("*").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
 def get_expenses_for_report(report_id):
+    supabase = init_connection() # Connect when the function is called
     response = supabase.table('expenses').select("*").eq('report_id', report_id).execute()
     return pd.DataFrame(response.data)
 
 def get_receipt_public_url(path: str) -> str:
+    supabase = init_connection() # Connect when the function is called
     if not path: return ""
     return supabase.storage.from_('receipts').get_public_url(path)
