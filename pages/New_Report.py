@@ -39,12 +39,11 @@ if uploaded_receipt is not None:
         
         receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
         
-        if receipt_path_for_db: 
-            st.success("Receipt uploaded successfully!")
-        else: 
-            st.error("Failed to upload receipt.")
+        if receipt_path_for_db: st.success("Receipt uploaded successfully!")
+        else: st.error("Failed to upload receipt.")
         st.info("OCR parsing is basic. Please verify the fields below.")
 else:
+    parsed_data = ocr_utils.parse_ocr_text("") # Ensure parsed_data exists even without upload
     receipt_path_for_db = None
 
 min_allowed_value = 0.01
@@ -52,34 +51,25 @@ min_allowed_value = 0.01
 with st.form("expense_item_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
-        # --- LOGIC CORRECTION FOR DATE HANDLING ---
-        # 1. Try to convert the date string from OCR. errors='coerce' will turn failures into 'NaT'.
         parsed_timestamp = pd.to_datetime(parsed_data.get("date"), errors='coerce')
-
-        # 2. Check if the result is 'NaT' (Not a Time). If so, default to today.
-        if pd.isna(parsed_timestamp):
-            initial_date = date.today()
-        else:
-            initial_date = parsed_timestamp.date()
-
-        # 3. Pass the safe 'initial_date' to the widget.
+        initial_date = date.today() if pd.isna(parsed_timestamp) else parsed_timestamp.date()
         expense_date = st.date_input("Expense Date", value=initial_date)
-        # --- END OF LOGIC CORRECTION ---
-
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
+        description = st.text_area("Description")
         
     with col2:
         ocr_amount = float(parsed_data.get("total_amount", 0.0))
         initial_value = max(min_allowed_value, ocr_amount)
-        
-        amount = st.number_input(
-            "Amount",
-            min_value=min_allowed_value,
-            value=initial_value,
-            format="%.2f"
-        )
-        
-        description = st.text_area("Description")
+        amount = st.number_input("Amount (Total)", min_value=min_allowed_value, value=initial_value, format="%.2f")
+
+        st.markdown("###### Taxes (Editable)")
+        tax_col1, tax_col2, tax_col3 = st.columns(3)
+        with tax_col1:
+            gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)), format="%.2f")
+        with tax_col2:
+            pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
+        with tax_col3:
+            hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
         
     submitted_item = st.form_submit_button("Add Item to Report")
 
@@ -87,7 +77,10 @@ with st.form("expense_item_form", clear_on_submit=True):
         new_item = {
             "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
             "receipt_path": receipt_path_for_db,
-            "ocr_text": ocr_raw_text if uploaded_receipt and 'ocr_raw_text' in locals() else None
+            "ocr_text": ocr_raw_text if uploaded_receipt and 'ocr_raw_text' in locals() else None,
+            "gst_amount": gst_amount, # Add tax values
+            "pst_amount": pst_amount,
+            "hst_amount": hst_amount
         }
         st.session_state.current_report_items.append(new_item)
         st.success(f"Added: {vendor} - ${amount:.2f}")
@@ -95,8 +88,10 @@ with st.form("expense_item_form", clear_on_submit=True):
 if st.session_state.current_report_items:
     st.markdown("---")
     st.subheader("Current Report Items")
+    # Display new tax columns in the temporary dataframe
+    display_cols = ['date', 'vendor', 'description', 'gst_amount', 'pst_amount', 'hst_amount', 'amount']
     items_df = pd.DataFrame(st.session_state.current_report_items)
-    st.dataframe(items_df[['date', 'vendor', 'description', 'amount']])
+    st.dataframe(items_df[display_cols])
     total_report_amount = items_df['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
 
@@ -108,9 +103,11 @@ if st.session_state.current_report_items:
                 report_id = su.add_report(user_id, report_name, total_report_amount)
                 if report_id:
                     for item in st.session_state.current_report_items:
+                        # Pass the tax values to the database function
                         su.add_expense_item(
                             report_id, item['date'], item['vendor'], item['description'], item['amount'],
-                            item.get('receipt_path'), item.get('ocr_text')
+                            item.get('receipt_path'), item.get('ocr_text'),
+                            item.get('gst_amount'), item.get('pst_amount'), item.get('hst_amount')
                         )
                     st.success(f"Report '{report_name}' submitted successfully!")
                     st.session_state.current_report_items = []
