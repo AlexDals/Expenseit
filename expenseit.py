@@ -4,6 +4,8 @@ from utils import supabase_utils as su
 
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
+# --- USER AUTHENTICATION ---
+# This part remains the same. We fetch the user data from Supabase.
 try:
     user_credentials = su.fetch_all_users_for_auth()
     
@@ -22,15 +24,21 @@ except Exception as e:
     st.error(f"An error occurred during authentication setup: {e}")
     st.stop()
 
-name, authentication_status, username = authenticator.login()
+# --- NEW LOGIN LOGIC ---
+# The authenticator.login() method is called here to render the form.
+# It no longer returns variables. Instead, it updates st.session_state.
+authenticator.login()
 
-if authentication_status == False:
+# We now check for authentication status in st.session_state.
+if st.session_state.get("authentication_status") is False:
     st.error("Username/password is incorrect")
-elif authentication_status == None:
+elif st.session_state.get("authentication_status") is None:
     st.warning("Please enter your username and password")
     st.info("New user? Navigate to the **Register** page from the sidebar.")
-elif authentication_status:
-    st.sidebar.title(f"Welcome {name}!")
+elif st.session_state.get("authentication_status"):
+    # --- Main App for Logged-in User ---
+    # We access the user's name from st.session_state.
+    st.sidebar.title(f"Welcome {st.session_state.get('name')}!")
     authenticator.logout("Logout", "sidebar")
 
     st.title("Employee Expense Reporting App")
@@ -39,6 +47,8 @@ elif authentication_status:
 
     st.subheader("Your Dashboard")
     try:
+        # We access the username from st.session_state.
+        username = st.session_state.get("username")
         user_id = su.get_user_id_by_username(username)
         if user_id:
             user_reports_df = su.get_reports_for_user(user_id)
