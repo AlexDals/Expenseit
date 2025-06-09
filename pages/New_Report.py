@@ -31,10 +31,8 @@ receipt_path_for_db = None
 
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
-        # --- LOGIC UPDATED TO HANDLE NEW RETURN SIGNATURE ---
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
 
-        # --- TEXT BOX RE-INSTATED ---
         with st.expander("View Raw Extracted Text"):
             st.text_area("OCR Output", raw_text, height=300)
 
