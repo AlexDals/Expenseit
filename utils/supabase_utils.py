@@ -56,13 +56,32 @@ def get_user_id_by_username(username: str) -> str | None:
         st.error(f"Error fetching user ID: {e}")
         return None
 
-def upload_receipt(image_bytes, username: str) -> str | None:
+# Replace the existing upload_receipt function in supabase_utils.py with this one.
+
+import os # Make sure to import 'os' at the top of the file
+
+def upload_receipt(uploaded_file, username: str) -> str | None:
+    """Uploads a receipt file (image or PDF) to Supabase Storage."""
     try:
-        file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}.png"
-        response = supabase.storage.from_("receipts").upload(file=image_bytes, path=file_path, file_options={"content-type": "image/png"})
+        # Get the file bytes
+        file_bytes = uploaded_file.getvalue()
         
+        # Get the original file extension
+        file_ext = os.path.splitext(uploaded_file.name)[1]
+        
+        # Generate a unique path for the file
+        file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
+        
+        # 'receipts' is the name of your public bucket
+        response = supabase.storage.from_("receipts").upload(
+            file=file_bytes, 
+            path=file_path, 
+            file_options={"content-type": uploaded_file.type}
+        )
+        
+        # Check if upload was successful
         if response.status_code == 200:
-            return file_path
+            return file_path # Store the path, not the full URL
         return None
     except Exception as e:
         st.error(f"Error uploading receipt: {e}")
