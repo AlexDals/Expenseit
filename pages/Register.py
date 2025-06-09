@@ -1,0 +1,40 @@
+import streamlit as st
+import streamlit_authenticator as stauth
+import re
+from utils import supabase_utils as su
+
+st.set_page_config(page_title="Register", layout="centered")
+st.title("Register New User")
+
+if st.session_state.get("authentication_status"):
+    st.warning("You are already logged in. Please log out to register a new user.")
+    st.stop()
+
+EMAIL_REGEX = r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$"
+
+with st.form("registration_form"):
+    st.write("Please fill out the details below to register.")
+    email = st.text_input("Email*", help="A valid email address.")
+    name = st.text_input("Full Name*", help="Your full name.")
+    username = st.text_input("Username*", help="Must be alphanumeric with no spaces.")
+    password = st.text_input("Password*", type="password")
+    confirm_password = st.text_input("Confirm Password*", type="password")
+    submitted = st.form_submit_button("Register")
+
+if submitted:
+    if not all([email, name, username, password, confirm_password]):
+        st.error("Please fill out all mandatory fields marked with *.")
+    elif password != confirm_password:
+        st.error("Passwords do not match.")
+    elif not re.match(EMAIL_REGEX, email):
+        st.error("Invalid email address.")
+    elif " " in username or not username.isalnum():
+        st.error("Username must be alphanumeric with no spaces.")
+    else:
+        try:
+            hashed_password = stauth.Hasher([password]).generate()[0]
+            if su.register_user(username, name, email, hashed_password):
+                st.success("Registration successful! You can now log in from the main page.")
+                st.balloons()
+        except Exception as e:
+            st.error(f"A critical error occurred: {e}")
