@@ -21,7 +21,6 @@ if 'current_report_items' not in st.session_state:
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Client Trip - June 2025")
 st.subheader("Add Expense Item")
 
-# Allow PDF files in the uploader
 uploaded_receipt = st.file_uploader(
     "Upload Receipt (Image or PDF)", 
     type=["png", "jpg", "jpeg", "pdf"]
@@ -33,13 +32,11 @@ receipt_path_for_db = None
 
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
-        # Call the new universal text extraction function
         ocr_raw_text = ocr_utils.extract_text_from_file(uploaded_receipt)
         
         ocr_text_display.text_area("Extracted OCR Text (Raw)", ocr_raw_text, height=200)
         parsed_data = ocr_utils.parse_ocr_text(ocr_raw_text)
         
-        # The upload function now takes the whole file object
         receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
         
         if receipt_path_for_db: 
@@ -55,8 +52,22 @@ min_allowed_value = 0.01
 with st.form("expense_item_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     with col1:
-        expense_date = st.date_input("Expense Date", value=pd.to_datetime(parsed_data.get("date", date.today()), errors='coerce'))
+        # --- LOGIC CORRECTION FOR DATE HANDLING ---
+        # 1. Try to convert the date string from OCR. errors='coerce' will turn failures into 'NaT'.
+        parsed_timestamp = pd.to_datetime(parsed_data.get("date"), errors='coerce')
+
+        # 2. Check if the result is 'NaT' (Not a Time). If so, default to today.
+        if pd.isna(parsed_timestamp):
+            initial_date = date.today()
+        else:
+            initial_date = parsed_timestamp.date()
+
+        # 3. Pass the safe 'initial_date' to the widget.
+        expense_date = st.date_input("Expense Date", value=initial_date)
+        # --- END OF LOGIC CORRECTION ---
+
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
+        
     with col2:
         ocr_amount = float(parsed_data.get("total_amount", 0.0))
         initial_value = max(min_allowed_value, ocr_amount)
