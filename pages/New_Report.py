@@ -21,7 +21,6 @@ if 'current_report_items' not in st.session_state:
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Client Trip - June 2025")
 st.subheader("Add Expense Item")
 
-# --- FIX: The File Uploader must be defined BEFORE it is checked. ---
 uploaded_receipt = st.file_uploader(
     "Upload Receipt (Image or PDF)", 
     type=["png", "jpg", "jpeg", "pdf"]
@@ -30,29 +29,25 @@ uploaded_receipt = st.file_uploader(
 parsed_data = {}
 receipt_path_for_db = None
 
-# Now we can safely check if the variable has a file in it.
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
-        # Call the single pipeline function from our advanced OCR utility
-        parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
+        # --- LOGIC UPDATED TO HANDLE NEW RETURN SIGNATURE ---
+        raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
 
-        # Check for and display any errors from the OCR process
+        # --- TEXT BOX RE-INSTATED ---
+        with st.expander("View Raw Extracted Text"):
+            st.text_area("OCR Output", raw_text, height=300)
+
         if "error" in parsed_data:
             st.error(parsed_data["error"])
-            # Clear parsed_data so the form doesn't use old/bad values
             parsed_data = {} 
         else:
             st.success("OCR processing complete. Please verify the extracted values.")
         
-        # The upload function takes the whole file object
         receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
-        
-        if receipt_path_for_db: 
-            st.success("Receipt uploaded successfully!")
-        else: 
-            st.error("Failed to upload receipt.")
+        if receipt_path_for_db: st.success("Receipt uploaded successfully!")
+        else: st.error("Failed to upload receipt.")
 else:
-    # Initialize with default structure if no file is uploaded
     parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
 
 min_allowed_value = 0.01
@@ -86,10 +81,8 @@ with st.form("expense_item_form", clear_on_submit=True):
         new_item = {
             "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
             "receipt_path": receipt_path_for_db,
-            "ocr_text": "N/A - Positional OCR Used", # Raw text is no longer the primary source
-            "gst_amount": gst_amount,
-            "pst_amount": pst_amount,
-            "hst_amount": hst_amount
+            "ocr_text": raw_text if uploaded_receipt else "N/A",
+            "gst_amount": gst_amount, "pst_amount": pst_amount, "hst_amount": hst_amount
         }
         st.session_state.current_report_items.append(new_item)
         st.success(f"Added: {vendor} - ${amount:.2f}")
