@@ -92,12 +92,22 @@ def add_report(user_id, report_name, total_amount) -> str | None:
         st.error(f"Error adding report: {e}")
         return None
 
-def add_expense_item(report_id, expense_date, vendor, description, amount, receipt_path=None, ocr_text=None):
-    supabase = init_connection() # Connect when the function is called
+# In utils/supabase_utils.py, replace the add_expense_item function with this one.
+
+def add_expense_item(report_id, expense_date, vendor, description, amount, receipt_path=None, ocr_text=None, gst_amount=None, pst_amount=None, hst_amount=None):
+    """Adds a new expense item to the 'expenses' table, including tax amounts."""
     try:
         supabase.table('expenses').insert({
-            "report_id": report_id, "expense_date": str(expense_date), "vendor": vendor,
-            "description": description, "amount": amount, "receipt_path": receipt_path, "ocr_text": ocr_text
+            "report_id": report_id,
+            "expense_date": str(expense_date),
+            "vendor": vendor,
+            "description": description,
+            "amount": amount,
+            "receipt_path": receipt_path,
+            "ocr_text": ocr_text,
+            "gst_amount": gst_amount,
+            "pst_amount": pst_amount,
+            "hst_amount": hst_amount
         }).execute()
     except Exception as e:
         st.error(f"Error adding expense item: {e}")
