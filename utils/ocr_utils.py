@@ -5,8 +5,8 @@ import re
 import fitz  # PyMuPDF
 import cv2  # OpenCV
 import numpy as np
+from itertools import combinations
 
-# --- IMAGE PREPROCESSING (No changes) ---
 def preprocess_image_for_ocr(image_bytes):
     try:
         img_array = np.frombuffer(image_bytes, np.uint8)
@@ -58,7 +58,6 @@ def preprocess_image_for_ocr(image_bytes):
         _, processed_img_bytes = cv2.imencode('.png', thresh)
         return processed_img_bytes.tobytes()
 
-# --- TEXT EXTRACTION (No changes) ---
 def extract_text_from_file(uploaded_file):
     try:
         file_bytes = uploaded_file.getvalue()
@@ -83,7 +82,6 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error during OCR processing: {str(e)}"
 
-# --- NEW PARSING LOGIC: TARGETED REGEX ---
 def parse_ocr_text(text: str):
     parsed_data = {
         "vendor": "N/A", "date": "N/A", "total_amount": 0.0,
@@ -94,57 +92,81 @@ def parse_ocr_text(text: str):
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
     # --- Vendor and Date Extraction ---
-    # Vendor is often the first significant capitalized line
-    for line in lines:
-        if len(line) > 3 and line.isupper():
-            parsed_data["vendor"] = line
-            break
+    if lines:
+        for line in lines:
+            if len(line) > 3 and line.isupper() and not any(char.isdigit() for char in line):
+                parsed_data["vendor"] = line
+                break
+        if parsed_data["vendor"] == "N/A":
+             # Fallback for other vendor formats
+            for line in lines:
+                if line.lower().startswith("sold by / vendu par:"):
+                    parsed_data["vendor"] = line.split(":", 1)[1].strip()
+                    break
 
-    date_pattern = r'(?i)(?:Date|facturation)[:\s]*(\d{1,2}\s+\w+\s+\d{4})' # For "27 May 2025"
+    date_pattern = r'(?i)(?:Date|facturation|DATE HEURE)[:\s]*((?:\d{1,2}[-/.\s]+\w+[-/.\s]+\d{2,4})|(?:\w+[-/.\s]+\d{1,2}[,.\s]+\d{2,4})|(?:\d{2,4}[/.\s]+\d{1,2}[/.\s]+\d{1,2}))'
     date_match = re.search(date_pattern, text)
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
-    else: # Fallback for other formats like yy mm/dd
-        date_pattern_alt = r'(\d{2})\s(\d{2}/\d{2})'
-        date_match_alt = re.search(date_pattern_alt, text)
-        if date_match_alt:
-            parsed_data["date"] = f"20{date_match_alt.group(1)}-{date_match_alt.group(2).replace('/', '-')}"
     
-    # --- Targeted Regex for Totals and Taxes ---
-    def find_value_by_keyword(text, keywords):
-        for keyword in keywords:
-            # Pattern: keyword, optional colon, optional space, optional $, the number
-            pattern = re.compile(fr'(?i){keyword}\s*:?\s*[$]?\s*(\d+[.,]\d{{2}})')
-            match = pattern.search(text)
-            if match:
-                return float(match.group(1).replace(',', '.'))
-        return 0.0
+    # --- Mathematical parsing for Total, Subtotal, and Taxes ---
+    all_amounts = sorted(list(set([float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)])), reverse=True)
+    
+    if len(all_amounts) >= 2:
+        grand_total = all_amounts[0]
+        parsed_data["total_amount"] = grand_total
+        
+        subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
+        subtotal = 0.0
+        for line in lines:
+            if any(keyword in line.lower() for keyword in subtotal_keywords):
+                line_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
+                if line_amounts:
+                    subtotal = max(line_amounts)
+                    break
+        
+        if subtotal == 0.0 and len(all_amounts) > 1:
+            subtotal = all_amounts[1]
 
-    parsed_data["total_amount"] = find_value_by_keyword(text, ["Total", "Total payable"])
-    parsed_data["gst_amount"] = find_value_by_keyword(text, ["TPS", "GST"])
-    parsed_data["pst_amount"] = find_value_by_keyword(text, ["TVQ", "QST", "PST"])
-    parsed_data["hst_amount"] = find_value_by_keyword(text, ["HST", "TVH"])
+        expected_tax_sum = round(grand_total - subtotal, 2)
+        if expected_tax_sum > 0:
+            tax_candidates = [amt for amt in all_amounts if amt < subtotal and abs(amt - expected_tax_sum) > 0.01]
+            validated_taxes = []
+            
+            for i in range(1, len(tax_candidates) + 1):
+                for combo in combinations(tax_candidates, i):
+                    if abs(sum(combo) - expected_tax_sum) < 0.02:
+                        validated_taxes = sorted(list(combo))
+                        break
+                if validated_taxes:
+                    break
+            
+            if validated_taxes:
+                if len(validated_taxes) == 1:
+                    if any(keyword in text.lower() for keyword in ["hst", "tvh"]):
+                         parsed_data["hst_amount"] = validated_taxes[0]
+                    else:
+                         parsed_data["gst_amount"] = validated_taxes[0]
+                elif len(validated_taxes) >= 2:
+                    parsed_data["gst_amount"] = validated_taxes[0]
+                    parsed_data["pst_amount"] = validated_taxes[1]
 
     # --- Line Item Extraction ---
-    # This is a heuristic: assumes a line item has text at the start and a price at the end
     line_item_pattern = re.compile(r'^(.*?)\s+([$]?\d+[.,]\d{2})$', re.MULTILINE)
-    subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
-    
+    stop_keywords = ["sous-total", "subtotal", "gst", "tps", "pst", "qst", "hst", "tvh", "total"]
+
     for line in lines:
+        if any(keyword in line.lower() for keyword in stop_keywords):
+            break 
         match = line_item_pattern.match(line)
-        # Check if it's a line item and not a total/tax line
-        if match and not any(keyword in line.lower() for keyword in subtotal_keywords + ["tps", "tvq", "total"]):
+        if match:
             description = match.group(1).strip()
-            # Ignore lines that are likely not items
-            if len(description) < 4 or description.isupper():
-                continue
-            
-            price = float(match.group(2).replace('$', '').replace(',', '.'))
-            parsed_data["line_items"].append({"description": description, "price": price})
+            if len(description) > 3 and not description.lower() == "ecofrais":
+                price = float(match.group(2).replace('$', '').replace(',', '.'))
+                parsed_data["line_items"].append({"description": description, "price": price})
 
     return parsed_data
 
-# --- Main Entry Point Function (No changes) ---
 def extract_and_parse_file(uploaded_file):
     try:
         raw_text = extract_text_from_file(uploaded_file)
