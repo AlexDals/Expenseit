@@ -13,7 +13,6 @@ def preprocess_image_for_ocr(image_bytes):
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        # Increase scale for better detail recognition
         width = int(img.shape[1] * 2)
         height = int(img.shape[0] * 2)
         resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
@@ -21,7 +20,6 @@ def preprocess_image_for_ocr(image_bytes):
         _, processed_img_bytes = cv2.imencode('.png', final_img)
         return processed_img_bytes.tobytes()
     except Exception:
-        # Fallback to a simpler method if advanced processing fails
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -29,14 +27,12 @@ def preprocess_image_for_ocr(image_bytes):
         _, processed_img_bytes = cv2.imencode('.png', thresh)
         return processed_img_bytes.tobytes()
 
-
 def extract_text_from_file(uploaded_file):
     """Extracts text from file using OCR."""
     try:
         file_bytes = uploaded_file.getvalue()
         full_text = ""
-        # PSM 6 is generally better for blocks of text like receipts
-        custom_config = r'--oem 3 --psm 6'
+        custom_config = r'--oem 3 --psm 4' # PSM 4 or 6 can be better for receipts
         if uploaded_file.type == "application/pdf":
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                 for page in doc:
@@ -52,85 +48,96 @@ def extract_text_from_file(uploaded_file):
         return f"Error during OCR processing: {str(e)}"
 
 def parse_ocr_text(text: str):
-    """Parses OCR text using the 'Numbers First' mathematical deduction method."""
+    """Parses OCR text using mathematical deduction and a stateful line-item parser."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
     # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
-        vendor_candidates = []
-        for line in lines[:5]: # Check top 5 lines
-            # A good vendor name is usually short, capitalized, and has no digits.
-            if len(line) > 3 and len(line) < 30 and line.upper() == line and not any(char.isdigit() for char in line):
-                vendor_candidates.append(line)
-        if vendor_candidates:
-            parsed_data["vendor"] = sorted(vendor_candidates, key=len, reverse=True)[0]
-
+        for line in lines[:5]:
+            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+                parsed_data["vendor"] = line
+                break
+    
     date_pattern = r'(\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2})'
     date_match = re.search(date_pattern, text)
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
     
-    # --- Stage 2: "Numbers First" Mathematical Parsing ---
+    # --- Stage 2: "Numbers First" Parsing for Financial Data ---
     all_amounts = sorted(list(set([float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)])), reverse=True)
     
     if len(all_amounts) >= 2:
-        # Assumption 1: Grand Total is the largest number on the receipt.
         grand_total = all_amounts[0]
         parsed_data["total_amount"] = grand_total
         
-        # Assumption 2: Subtotal is the second largest number.
-        subtotal = all_amounts[1]
+        subtotal = 0.0
+        # Find subtotal by looking for keywords first
+        for line in lines:
+            if any(kw in line.lower() for kw in ["sous-total", "subtotal"]):
+                amounts_on_line = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
+                if amounts_on_line:
+                    subtotal = max(amounts_on_line)
+                    break
+        # Fallback if keyword not found
+        if subtotal == 0.0 and len(all_amounts) > 1:
+            subtotal = all_amounts[1]
         
-        # Assumption 3: The sum of taxes can be deduced.
+        # Mathematical Validation for Taxes
         expected_tax_sum = round(grand_total - subtotal, 2)
-        
-        # Find all other smaller numbers that could be tax components.
-        tax_candidates = [amt for amt in all_amounts if amt < subtotal]
-        
-        validated_taxes = []
         if expected_tax_sum > 0:
-            # Find a combination of candidates that perfectly adds up to the expected tax sum.
-            for i in range(1, 4): # Check for 1, 2, or 3 taxes
+            tax_candidates = [amt for amt in all_amounts if amt < subtotal and abs(amt - expected_tax_sum) > 0.01]
+            validated_taxes = []
+            for i in range(1, 4):
                 for combo in combinations(tax_candidates, i):
-                    if abs(sum(combo) - expected_tax_sum) < 0.02: # 2 cent tolerance for rounding
+                    if abs(sum(combo) - expected_tax_sum) < 0.02:
                         validated_taxes = sorted(list(combo))
                         break
                 if validated_taxes:
                     break
-        
-        # --- Stage 3: Assign validated taxes ---
-        if validated_taxes:
-            # If a single tax matches the sum, it could be HST.
-            if len(validated_taxes) == 1:
-                if any(keyword in text.lower() for keyword in ["hst", "tvh"]):
-                     parsed_data["hst_amount"] = validated_taxes[0]
-                else: # Otherwise, assume it's a lone GST/PST.
-                     parsed_data["gst_amount"] = validated_taxes[0]
-            # If two taxes are found, assume smaller is GST, larger is PST.
-            elif len(validated_taxes) >= 2:
-                parsed_data["gst_amount"] = validated_taxes[0]
-                parsed_data["pst_amount"] = validated_taxes[1]
-
-    # --- Stage 4: Line Item Extraction ---
-    # Heuristic: A line item is a line with a number that is NOT a found total or tax.
-    found_financials = [parsed_data['total_amount'], subtotal, *validated_taxes]
-    
-    for line in lines:
-        line_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
-        if len(line_amounts) == 1:
-            price = line_amounts[0]
-            # Check if this price is one of our main financial numbers
-            is_financial = False
-            for fin_val in found_financials:
-                if abs(price - fin_val) < 0.02:
-                    is_financial = True
-                    break
             
-            if not is_financial:
-                description = line.replace(str(price), '').replace('$', '').strip()
-                if len(description) > 3:
-                    parsed_data["line_items"].append({"description": description, "price": price})
+            if validated_taxes:
+                if len(validated_taxes) == 1:
+                    parsed_data["hst_amount"] = validated_taxes[0]
+                elif len(validated_taxes) >= 2:
+                    parsed_data["gst_amount"] = validated_taxes[0]
+                    parsed_data["pst_amount"] = validated_taxes[1]
+
+    # --- Stage 3: Stateful Line Item Extraction ---
+    line_items = []
+    current_description_lines = []
+    stop_keywords = ["sous-total", "subtotal", "ecofrais"]
+    
+    money_pattern = re.compile(r'([\d.,]+\d{2})$')
+
+    for line in lines:
+        line_lower = line.lower()
+        if any(keyword in line_lower for keyword in stop_keywords):
+            break # Stop when we reach the subtotal section
+
+        match = money_pattern.search(line)
+        
+        # If the line ends with a number, it's the end of an item
+        if match:
+            price = float(match.group(1).replace(',', '.'))
+            # The description part is the text before the price
+            description_part = line[:match.start()].strip()
+            
+            current_description_lines.append(description_part)
+            full_description = " ".join(filter(None, current_description_lines))
+
+            # Add the completed item
+            if full_description:
+                line_items.append({"description": full_description, "price": price})
+            
+            # Reset for the next item
+            current_description_lines = []
+        else:
+            # If no price, it's part of a description
+            if len(line) > 1:
+                current_description_lines.append(line)
+
+    parsed_data["line_items"] = line_items
 
     return parsed_data
 
