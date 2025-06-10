@@ -3,9 +3,11 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
+# --- CORRECTED AUTHENTICATION GUARD ---
 if not st.session_state.get("authentication_status"):
-    st.warning("Please login to access this page.")
-    st.switch_page("streamlit_app.py")
+    st.warning("Please log in to access this page.")
+    st.stop() # Stop execution if not authenticated
+# --- END OF CORRECTION ---
 
 st.title("📄 Create New Expense Report")
 username = st.session_state.get("username")
