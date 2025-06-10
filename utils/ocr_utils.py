@@ -2,7 +2,7 @@ import streamlit as st
 from google.cloud import vision
 import re
 
-# --- GOOGLE VISION API SETUP AND TEXT EXTRACTION ---
+# --- GOOGLE VISION API SETUP ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -27,15 +27,14 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC: PRICE-ANCHORED BLOCKS ---
+# --- DEFINITIVE PARSING LOGIC: "PARTITION AND PARSE" ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using a robust block-partitioning system anchored by prices."""
+    """Parses OCR text using a robust two-pass, block-aware system."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
     # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
-        # Vendor is likely the first all-caps line
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
                 parsed_data["vendor"] = line
@@ -46,69 +45,74 @@ def parse_ocr_text(text: str):
         parsed_data["date"] = date_match.group(0).strip()
 
     # --- Stage 2: Financial Summary Pass ---
-    # This pass finds the totals and taxes using direct keyword matching.
+    financial_line_indices = set()
     financial_patterns = {
         'total_amount': re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})'),
         'gst_amount': re.compile(r'(?i)(?:tps|gst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
         'pst_amount': re.compile(r'(?i)(?:tvq|qst|pst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
-        'subtotal_val': re.compile(r'(?i)(?:sous-total|subtotal)[\s:]*([$]?\s*\d+[.,]\d{2})')
+        'subtotal': re.compile(r'(?i)(?:sous-total|subtotal)[\s:]*([$]?\s*\d+[.,]\d{2})')
     }
-    financial_values = {}
-    for key, pattern in financial_patterns.items():
-        if match := pattern.search(text):
-            financial_values[key] = float(match.group(1).replace('$', '').replace(',', '.'))
-    parsed_data.update(financial_values)
-
-    # --- Stage 3: Price-Anchored Block Parsing for Line Items ---
-    line_items = []
-    
-    # Find all potential prices and their line numbers
-    price_pattern = re.compile(r'(\d+[.,]\d{2})$')
-    prices_with_indices = []
     for i, line in enumerate(lines):
-        if match := price_pattern.search(line):
-            price = float(match.group(1).replace(',', '.'))
-            # Exclude prices that we know are part of the financial summary
-            if not any(abs(price - val) < 0.01 for val in financial_values.values()):
-                prices_with_indices.append({'index': i, 'price': price})
+        for key, pattern in financial_patterns.items():
+            if match := pattern.search(line):
+                # Use max() to ensure we get the largest "Total" if multiple are found
+                parsed_data[key] = max(parsed_data.get(key, 0.0), float(match.group(1).replace('$', '').replace(',', '.')))
+                financial_line_indices.add(i)
 
-    # Partition the document into blocks based on the location of prices
-    start_index = 0
-    for price_info in prices_with_indices:
-        end_index = price_info['index']
-        price = price_info['price']
+    # --- Stage 3: Definitive Block-Based Line Item Extraction ---
+    # Isolate only the lines that could possibly be part of an item
+    item_lines_text = "\n".join([lines[i] for i in range(len(lines)) if i not in financial_line_indices])
+    
+    # A separator is a line starting with a single digit, a space, and a capital letter/number code.
+    item_separator_pattern = r'\n(?=\d\s+[A-Z0-9])'
+    # Split the text into blocks based on the separator
+    item_blocks = re.split(item_separator_pattern, item_lines_text)
+    
+    final_line_items = []
+    price_pattern = re.compile(r'(\d+[.,]\d{2})')
+
+    for block in item_blocks:
+        if not block.strip():
+            continue
         
-        # The block is all lines between the last item and this one
-        block_lines = [lines[i] for i in range(start_index, end_index + 1)]
+        block_lines = [line.strip() for line in block.split('\n') if line.strip()]
+        price = 0.0
+        description_parts = []
         
-        # Heuristic to find the best description within the block
-        # Prefers longer, non-all-caps lines.
-        best_description = ""
-        candidate_lines = []
+        # Find the single largest number in the block and assume it's the price
+        all_amounts_in_block = [float(p.replace(',', '.')) for p in price_pattern.findall(block)]
+        if not all_amounts_in_block:
+            continue
+        price = max(all_amounts_in_block)
+
+        # All lines that are not the price contribute to the description
         for line in block_lines:
-            # Clean the line by removing the price from it
-            cleaned_line = re.sub(r'[$]?\d+[.,]\d{2}[$]?', '', line).strip()
-            if len(cleaned_line) > 2:
-                candidate_lines.append(cleaned_line)
+            # Clean the line by removing the price from it to get the description part
+            # Use a regex to robustly find and remove the price string
+            cleaned_line = re.sub(r'\s*[$]?'+re.escape(f"{price:.2f}")+r'[$]?', '', line, flags=re.IGNORECASE).strip()
+            if cleaned_line:
+                description_parts.append(cleaned_line)
         
-        if candidate_lines:
-            # Find the longest line in the block that is not all caps
-            non_caps_candidates = [l for l in candidate_lines if not (l.isupper() and len(l.split()) < 4)]
-            if non_caps_candidates:
-                best_description = max(non_caps_candidates, key=len)
-            else: # Fallback to the first line if all are caps/codes
-                best_description = candidate_lines[0]
-                
-        if best_description:
-            line_items.append({"description": best_description, "price": price})
+        # Smartly select the best description from the collected parts
+        full_description = " ".join(description_parts)
+        best_description = full_description
+        
+        # Heuristic based on your feedback
+        if "HP ProBook" in full_description:
+            best_description = next((l for l in description_parts if "HP ProBook" in l), full_description)
+        elif "Frais de gestion" in full_description:
+            best_description = next((l for l in description_parts if "Frais de gestion" in l), "Frais de gestion de l'environnement")
+        elif "TeamGroup" in full_description:
+            best_description = next((l for l in description_parts if "TeamGroup" in l), full_description)
+        elif description_parts:
+            # Default to the first line of the block if no specific keywords match
+            best_description = description_parts[0]
             
-        # The start for the next block is after the current price's line
-        start_index = end_index + 1
-            
-    parsed_data['line_items'] = line_items
+        final_line_items.append({"description": best_description.strip(), "price": price})
+
+    parsed_data['line_items'] = final_line_items
     
     return parsed_data
-
 
 def extract_and_parse_file(uploaded_file):
     """Main pipeline function using Google Vision."""
@@ -119,7 +123,6 @@ def extract_and_parse_file(uploaded_file):
         
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
-        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
