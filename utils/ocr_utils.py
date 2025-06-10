@@ -27,16 +27,17 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC: PRICE-ANCHORED ---
+# --- DEFINITIVE PARSING LOGIC: PARTITION-FIRST ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using a robust price-anchored, block-partitioning system."""
+    """Parses OCR text using a robust block-partitioning system."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
     # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
         for line in lines[:5]:
-            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+            # A good vendor name is often capitalized and doesn't contain digits
+            if len(line) > 3 and line.upper() == line and not any(char.isdigit() for char in line):
                 parsed_data["vendor"] = line
                 break
     
@@ -45,7 +46,7 @@ def parse_ocr_text(text: str):
         parsed_data["date"] = date_match.group(0).strip()
 
     # --- Stage 2: Financial Summary Pass ---
-    # Extract financial data and log the line indices to exclude them from item parsing.
+    # Find and extract financial data first, and keep track of which lines they were on.
     financial_line_indices = set()
     financial_patterns = {
         'total_amount': re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})'),
@@ -56,49 +57,54 @@ def parse_ocr_text(text: str):
     for i, line in enumerate(lines):
         for key, pattern in financial_patterns.items():
             if match := pattern.search(line):
+                # Use max() to ensure we get the largest "Total" if multiple are found
                 parsed_data[key] = max(parsed_data.get(key, 0.0), float(match.group(1).replace('$', '').replace(',', '.')))
                 financial_line_indices.add(i)
 
-    # --- Stage 3: Price-Anchored Block Parsing for Line Items ---
+    # --- Stage 3: Partition and Parse Line Items ---
+    # Isolate only the lines that could possibly be part of an item
+    item_lines_text = "\n".join([lines[i] for i in range(len(lines)) if i not in financial_line_indices])
+    
+    # A separator is a line starting with a single digit, a space, and a capital letter/number code.
+    # We use a lookahead `(?=...)` in re.split to keep the separator as the start of the next block.
+    item_separator_pattern = r'\n(?=\d\s+[A-Z0-9])'
+    item_blocks = re.split(item_separator_pattern, item_lines_text)
+    
     final_line_items = []
-    
-    # First, find all potential item prices and their line numbers
-    price_pattern = re.compile(r'(\d+[.,]\d{2})$')
-    item_price_anchors = []
-    
-    start_index = 0
-    # Find start of item section (heuristic: after vendor/address info)
-    for i, line in enumerate(lines):
-        if len(line) > 30 and ("description" in line.lower() or "quantit" in line.lower()):
-            start_index = i + 1
-            break
-            
-    for i in range(start_index, len(lines)):
-        if i in financial_line_indices:
-            continue
-        if match := price_pattern.search(lines[i]):
-            price = float(match.group(1).replace(',', '.'))
-            item_price_anchors.append({'index': i, 'price': price})
+    price_pattern = re.compile(r'(\d+[.,]\d{2})')
 
-    # Now, build description blocks based on the space between price anchors
-    last_price_index = start_index -1
-    for anchor in item_price_anchors:
-        current_price_index = anchor['index']
-        price = anchor['price']
+    for block in item_blocks:
+        block = block.strip()
+        if not block:
+            continue
         
-        # The description is all the lines between the last price and this one
+        # Find the single largest number in the block and assume it's the price
+        all_amounts_in_block = [float(p.replace(',', '.')) for p in price_pattern.findall(block)]
+        if not all_amounts_in_block:
+            continue
+            
+        price = max(all_amounts_in_block)
+        
+        # The description is the entire block, cleaned up
         description_lines = []
-        for i in range(last_price_index + 1, current_price_index + 1):
-             # Clean the line by removing the price from it
-            cleaned_line = re.sub(r'\s*[$]?'+re.escape(f"{price:.2f}")+r'[$]?', '', lines[i]).strip()
+        for line in block.split('\n'):
+            # Remove the price from the line to avoid including it in the description
+            cleaned_line = re.sub(r'\s*[$]?'+re.escape(f"{price:.2f}")+r'[$]?', '', line, flags=re.IGNORECASE).strip()
             if cleaned_line:
                 description_lines.append(cleaned_line)
         
-        if description_lines:
-            full_description = " ".join(description_lines)
-            final_line_items.append({"description": full_description, "price": price})
+        # Smartly select the best description from the collected parts
+        full_description = " ".join(description_lines)
+        best_description = ""
         
-        last_price_index = current_price_index
+        # Heuristic to find a human-readable description over product codes
+        human_readable_lines = [l for l in description_lines if not (l.isupper() and len(l.split()) < 4) and len(l) > 5]
+        if human_readable_lines:
+            best_description = max(human_readable_lines, key=len)
+        elif description_lines: # Fallback to the first line if all are codes/caps
+            best_description = description_lines[0]
+            
+        final_line_items.append({"description": best_description.strip(), "price": price})
 
     parsed_data['line_items'] = final_line_items
     
