@@ -2,7 +2,7 @@ import streamlit as st
 from google.cloud import vision
 import re
 
-# --- GOOGLE VISION API SETUP AND TEXT EXTRACTION ---
+# --- GOOGLE VISION API SETUP ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -27,15 +27,93 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC: PRICE-ANCHORED BLOCKS ---
+# --- DEFINITIVE PARSING LOGIC ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using a robust block-partitioning system anchored by prices."""
+    """Parses OCR text using a robust 'Right-to-Left' classification and a smart 'Look-Back' cleanup pass."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Stage 1: Basic Vendor and Date Extraction ---
+    # --- Stage 1: Classify all lines that end with a price ---
+    classified_items = []
+    line_pattern = re.compile(r'^(.*?)\s*([$]?\d+[.,]\d{2})[$]?\s*$')
+    
+    total_keywords = ["total"]
+    subtotal_keywords = ["sous-total", "subtotal"]
+    gst_keywords = ["tps", "gst"]
+    pst_keywords = ["tvq", "qst", "pst"]
+    hst_keywords = ["hst", "tvh"]
+
+    for i, line in enumerate(lines):
+        match = line_pattern.match(line)
+        if not match:
+            continue
+
+        description = match.group(1).strip()
+        price = float(match.group(2).replace('$', '').replace(',', '.'))
+        desc_lower = description.lower()
+        
+        item_type = 'item' 
+        
+        # Use independent if statements for robustness
+        if re.search(r'(?i)(?<!sous-)(?<!sub)total', desc_lower):
+            item_type = 'total'
+        if any(kw in desc_lower for kw in gst_keywords):
+            item_type = 'gst'
+        if any(kw in desc_lower for kw in pst_keywords):
+            item_type = 'pst'
+        if any(kw in desc_lower for kw in hst_keywords):
+            item_type = 'hst'
+        if any(kw in desc_lower for kw in subtotal_keywords):
+            item_type = 'subtotal'
+        
+        classified_items.append({'index': i, 'description': description, 'price': price, 'type': item_type})
+
+    # --- Stage 2: Assign Financials and Process Line Items with "Look-Back" ---
+    processed_indices = set()
+    
+    # Assign all classified financial data first
+    for item in classified_items:
+        if item['type'] == 'total':
+            parsed_data['total_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'gst':
+            parsed_data['gst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'pst':
+            parsed_data['pst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'hst':
+            parsed_data['hst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'subtotal':
+            processed_indices.add(item['index'])
+            
+    # "Look-Back" logic for items
+    final_line_items = []
+    item_only_list = [item for item in classified_items if item['type'] == 'item']
+    
+    for i, current_item in enumerate(item_only_list):
+        description_block = [current_item['description']]
+        price = current_item['price']
+        
+        # Determine the boundary to stop looking back (the line of the previous item)
+        previous_item_line_index = item_only_list[i-1]['index'] if i > 0 else -1
+        
+        lookup_index = current_item['index'] - 1
+        while lookup_index > previous_item_line_index:
+            line_to_add = lines[lookup_index]
+            description_block.insert(0, line_to_add)
+            lookup_index -= 1
+        
+        full_description = " ".join(filter(None, description_block)).strip()
+        
+        if full_description:
+             final_line_items.append({'description': full_description, 'price': price})
+
+    parsed_data['line_items'] = final_line_items
+
+    # --- Stage 3: Vendor and Date Extraction ---
     if lines:
-        # Vendor is likely the first all-caps line
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
                 parsed_data["vendor"] = line
@@ -44,71 +122,8 @@ def parse_ocr_text(text: str):
     date_pattern = r'(\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2})|(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})'
     if date_match := re.search(date_pattern, text):
         parsed_data["date"] = date_match.group(0).strip()
-
-    # --- Stage 2: Financial Summary Pass ---
-    # This pass finds the totals and taxes using direct keyword matching.
-    financial_patterns = {
-        'total_amount': re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})'),
-        'gst_amount': re.compile(r'(?i)(?:tps|gst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
-        'pst_amount': re.compile(r'(?i)(?:tvq|qst|pst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
-        'subtotal_val': re.compile(r'(?i)(?:sous-total|subtotal)[\s:]*([$]?\s*\d+[.,]\d{2})')
-    }
-    financial_values = {}
-    for key, pattern in financial_patterns.items():
-        if match := pattern.search(text):
-            financial_values[key] = float(match.group(1).replace('$', '').replace(',', '.'))
-    parsed_data.update(financial_values)
-
-    # --- Stage 3: Price-Anchored Block Parsing for Line Items ---
-    line_items = []
-    
-    # Find all potential prices and their line numbers
-    price_pattern = re.compile(r'(\d+[.,]\d{2})$')
-    prices_with_indices = []
-    for i, line in enumerate(lines):
-        if match := price_pattern.search(line):
-            price = float(match.group(1).replace(',', '.'))
-            # Exclude prices that we know are part of the financial summary
-            if not any(abs(price - val) < 0.01 for val in financial_values.values()):
-                prices_with_indices.append({'index': i, 'price': price})
-
-    # Partition the document into blocks based on the location of prices
-    start_index = 0
-    for price_info in prices_with_indices:
-        end_index = price_info['index']
-        price = price_info['price']
         
-        # The block is all lines between the last item and this one
-        block_lines = [lines[i] for i in range(start_index, end_index + 1)]
-        
-        # Heuristic to find the best description within the block
-        # Prefers longer, non-all-caps lines.
-        best_description = ""
-        candidate_lines = []
-        for line in block_lines:
-            # Clean the line by removing the price from it
-            cleaned_line = re.sub(r'[$]?\d+[.,]\d{2}[$]?', '', line).strip()
-            if len(cleaned_line) > 2:
-                candidate_lines.append(cleaned_line)
-        
-        if candidate_lines:
-            # Find the longest line in the block that is not all caps
-            non_caps_candidates = [l for l in candidate_lines if not (l.isupper() and len(l.split()) < 4)]
-            if non_caps_candidates:
-                best_description = max(non_caps_candidates, key=len)
-            else: # Fallback to the first line if all are caps/codes
-                best_description = candidate_lines[0]
-                
-        if best_description:
-            line_items.append({"description": best_description, "price": price})
-            
-        # The start for the next block is after the current price's line
-        start_index = end_index + 1
-            
-    parsed_data['line_items'] = line_items
-    
     return parsed_data
-
 
 def extract_and_parse_file(uploaded_file):
     """Main pipeline function using Google Vision."""
@@ -119,7 +134,6 @@ def extract_and_parse_file(uploaded_file):
         
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
-        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
