@@ -2,8 +2,8 @@ streamlit
 streamlit-authenticator>=0.3.0
 pandas
 Pillow
-pytesseract
 bcrypt
 supabase
 openpyxl
 google-cloud-vision
+PyMuPDF
