@@ -2,7 +2,7 @@ import streamlit as st
 from google.cloud import vision
 import re
 
-# --- GOOGLE VISION API SETUP ---
+# --- GOOGLE VISION API SETUP AND TEXT EXTRACTION ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -27,92 +27,13 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC ---
+# --- DEFINITIVE PARSING LOGIC: PARTITION-FIRST ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using a robust 'Right-to-Left' classification and a smart 'Look-Back' cleanup pass."""
+    """Parses OCR text using a robust block-partitioning system."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Stage 1: Classify all lines that end with a price ---
-    classified_items = []
-    line_pattern = re.compile(r'^(.*?)\s*([$]?\d+[.,]\d{2})[$]?\s*$')
-    
-    total_keywords = ["total"]
-    subtotal_keywords = ["sous-total", "subtotal"]
-    gst_keywords = ["tps", "gst"]
-    pst_keywords = ["tvq", "qst", "pst"]
-    hst_keywords = ["hst", "tvh"]
-
-    for i, line in enumerate(lines):
-        match = line_pattern.match(line)
-        if not match:
-            continue
-
-        description = match.group(1).strip()
-        price = float(match.group(2).replace('$', '').replace(',', '.'))
-        desc_lower = description.lower()
-        
-        item_type = 'item' 
-        
-        # Use independent if statements for robustness
-        if re.search(r'(?i)(?<!sous-)(?<!sub)total', desc_lower):
-            item_type = 'total'
-        if any(kw in desc_lower for kw in gst_keywords):
-            item_type = 'gst'
-        if any(kw in desc_lower for kw in pst_keywords):
-            item_type = 'pst'
-        if any(kw in desc_lower for kw in hst_keywords):
-            item_type = 'hst'
-        if any(kw in desc_lower for kw in subtotal_keywords):
-            item_type = 'subtotal'
-        
-        classified_items.append({'index': i, 'description': description, 'price': price, 'type': item_type})
-
-    # --- Stage 2: Assign Financials and Process Line Items with "Look-Back" ---
-    processed_indices = set()
-    
-    # Assign all classified financial data first
-    for item in classified_items:
-        if item['type'] == 'total':
-            parsed_data['total_amount'] = item['price']
-            processed_indices.add(item['index'])
-        elif item['type'] == 'gst':
-            parsed_data['gst_amount'] = item['price']
-            processed_indices.add(item['index'])
-        elif item['type'] == 'pst':
-            parsed_data['pst_amount'] = item['price']
-            processed_indices.add(item['index'])
-        elif item['type'] == 'hst':
-            parsed_data['hst_amount'] = item['price']
-            processed_indices.add(item['index'])
-        elif item['type'] == 'subtotal':
-            processed_indices.add(item['index'])
-            
-    # "Look-Back" logic for items
-    final_line_items = []
-    item_only_list = [item for item in classified_items if item['type'] == 'item']
-    
-    for i, current_item in enumerate(item_only_list):
-        description_block = [current_item['description']]
-        price = current_item['price']
-        
-        # Determine the boundary to stop looking back (the line of the previous item)
-        previous_item_line_index = item_only_list[i-1]['index'] if i > 0 else -1
-        
-        lookup_index = current_item['index'] - 1
-        while lookup_index > previous_item_line_index:
-            line_to_add = lines[lookup_index]
-            description_block.insert(0, line_to_add)
-            lookup_index -= 1
-        
-        full_description = " ".join(filter(None, description_block)).strip()
-        
-        if full_description:
-             final_line_items.append({'description': full_description, 'price': price})
-
-    parsed_data['line_items'] = final_line_items
-
-    # --- Stage 3: Vendor and Date Extraction ---
+    # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
@@ -122,7 +43,63 @@ def parse_ocr_text(text: str):
     date_pattern = r'(\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2})|(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})'
     if date_match := re.search(date_pattern, text):
         parsed_data["date"] = date_match.group(0).strip()
+
+    # --- Stage 2: Financial Summary Pass ---
+    financial_line_indices = set()
+    financial_patterns = {
+        'total_amount': re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})'),
+        'gst_amount': re.compile(r'(?i)(?:tps|gst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
+        'pst_amount': re.compile(r'(?i)(?:tvq|qst|pst)[\s:]*([$]?\s*\d+[.,]\d{2})'),
+        'subtotal': re.compile(r'(?i)(?:sous-total|subtotal|ecofrais)[\s:]*([$]?\s*\d+[.,]\d{2})')
+    }
+    for i, line in enumerate(lines):
+        for key, pattern in financial_patterns.items():
+            if match := pattern.search(line):
+                # Use max() to ensure we get the largest "Total" if multiple are found
+                parsed_data[key] = max(parsed_data.get(key, 0.0), float(match.group(1).replace('$', '').replace(',', '.')))
+                financial_line_indices.add(i)
+
+    # --- Stage 3: Partition and Parse Line Items ---
+    # Isolate only the lines that could possibly be part of an item
+    item_lines_text = "\n".join([lines[i] for i in range(len(lines)) if i not in financial_line_indices])
+    
+    # A separator is a line starting with a single digit, a space, and a capital letter/number code.
+    # We use a lookahead `(?=...)` in re.split to keep the separator as the start of the next block.
+    item_separator_pattern = r'(?=\n\d\s+[A-Z0-9])'
+    item_blocks = re.split(item_separator_pattern, item_lines_text)
+    
+    final_line_items = []
+    price_pattern = re.compile(r'(\d+[.,]\d{2})')
+
+    for block in item_blocks:
+        block = block.strip()
+        if not block:
+            continue
         
+        all_amounts_in_block = [float(p.replace(',', '.')) for p in price_pattern.findall(block)]
+        if not all_amounts_in_block:
+            continue
+            
+        price = max(all_amounts_in_block)
+        
+        # Heuristic: The best description is the longest line in the block that is not all-caps
+        description_lines = [line.strip() for line in block.split('\n') if line.strip()]
+        
+        best_description = ""
+        # Prefer longer lines that are not all-caps (which are often product codes)
+        human_readable_lines = [l for l in description_lines if not (l.isupper() and len(l.split()) < 4) and not price_pattern.search(l)]
+        
+        if human_readable_lines:
+            best_description = max(human_readable_lines, key=len)
+        else: # Fallback to the first line of the block if all are codes/caps
+            # Clean the first line from any price
+            first_line_cleaned = re.sub(r'\s*[$]?\d+[.,]\d{2}[$]?\s*$', '', block_lines[0]).strip()
+            best_description = first_line_cleaned if first_line_cleaned else "N/A"
+            
+        final_line_items.append({"description": best_description.strip(), "price": price})
+
+    parsed_data['line_items'] = final_line_items
+    
     return parsed_data
 
 def extract_and_parse_file(uploaded_file):
@@ -134,6 +111,7 @@ def extract_and_parse_file(uploaded_file):
         
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
+        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
