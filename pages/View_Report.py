@@ -2,6 +2,7 @@ import streamlit as st
 from utils import supabase_utils as su
 import pandas as pd
 import io # Required for in-memory Excel file
+import re # --- FIX: Import the 're' module for regular expressions ---
 
 # --- CORRECTED AUTHENTICATION GUARD ---
 if not st.session_state.get("authentication_status"):
@@ -63,7 +64,7 @@ else:
                 column_order=display_cols
             )
 
-            # --- NEW: EXPORT BUTTONS SECTION ---
+            # --- EXPORT BUTTONS SECTION ---
             st.markdown("---")
             st.subheader("Export This Report")
 
@@ -88,7 +89,6 @@ else:
 
             with col2:
                 # --- Excel Download ---
-                # Write to an in-memory buffer
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
                     export_df.to_excel(writer, index=False, sheet_name='Expenses')
@@ -101,7 +101,6 @@ else:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-            # --- END OF NEW SECTION ---
 
         else:
             st.info("No expense items found for this report.")
