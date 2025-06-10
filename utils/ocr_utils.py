@@ -1,9 +1,8 @@
 import streamlit as st
 from google.cloud import vision
-import google.generativeai as genai
-import json
+import re
 
-# --- GOOGLE VISION API SETUP (for OCR) ---
+# --- GOOGLE VISION API SETUP ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -12,92 +11,140 @@ def get_vision_client():
         client = vision.ImageAnnotatorClient.from_service_account_info(credentials_dict)
         return client
     except Exception as e:
-        st.error(f"Could not initialize Google Vision API client: {e}")
+        st.error(f"Could not initialize Google Vision API client: {e}. Please check your Streamlit secrets.")
         st.stop()
 
-# --- GEMINI API SETUP (for Parsing) ---
-@st.cache_resource
-def get_gemini_client():
-    """Initializes and returns a Gemini API client."""
-    try:
-        api_key = st.secrets.gemini.api_key
-        genai.configure(api_key=api_key)
-        # Using a model that is fast and capable of JSON output
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        return model
-    except Exception as e:
-        st.error(f"Could not initialize Gemini API client: {e}. Please check your Streamlit secrets.")
-        st.stop()
-
-
+# --- DEFINITIVE FILE EXTRACTION LOGIC ---
 def extract_text_from_file(uploaded_file):
-    """Extracts text from a file using Google Cloud Vision AI."""
+    """
+    Extracts text from an image or PDF file by sending the raw bytes directly
+    to the robust Google Vision batch processing endpoint.
+    """
     client = get_vision_client()
     file_bytes = uploaded_file.getvalue()
-    try:
-        image = vision.Image(content=file_bytes)
-        response = client.document_text_detection(image=image)
-        if response.error.message:
-            raise Exception(f"{response.error.message}")
-        return response.full_text_annotation.text
-    except Exception as e:
-        return f"Error calling Google Vision API: {str(e)}"
-
-# --- DEFINITIVE AI-POWERED PARSING LOGIC ---
-def parse_text_with_gemini(ocr_text: str):
-    """Uses Gemini to parse raw OCR text into a structured dictionary."""
-    model = get_gemini_client()
-
-    # This prompt is the "brain" of our parser. It instructs the AI on exactly what to do.
-    prompt = f"""
-    You are an expert expense analyst. Your task is to accurately extract structured information from the provided OCR text of a receipt.
-
-    INSTRUCTIONS:
-    1.  Analyze the entire receipt text provided below.
-    2.  Extract the following fields: vendor, date, total_amount, gst_amount, pst_amount, and all distinct line_items.
-    3.  For 'vendor', find the main store or company name. It's often at the top and in all caps.
-    4.  For 'date', find the primary date of the transaction.
-    5.  For 'total_amount', find the final grand total paid.
-    6.  For 'gst_amount' and 'pst_amount', find the amounts explicitly labeled with 'GST'/'TPS' and 'PST'/'TVQ' respectively.
-    7.  For 'line_items', extract all individual products or services. Each line item must have a 'description' and a 'price'. Do not include taxes, subtotals, or totals as line items.
-    8.  Return the data as a single, valid JSON object. Do not include any text or formatting outside of the JSON. If a value is not found, set it to 0.0 for numerical fields and null for text fields. The line_items should be an array of objects.
-
-    RECEIPT TEXT:
-    ---
-    {ocr_text}
-    ---
-
-    JSON OUTPUT:
-    """
+    mime_type = uploaded_file.type
     
     try:
-        # Configure the model to output JSON
-        generation_config = genai.GenerationConfig(response_mime_type="application/json")
-        response = model.generate_content(prompt, generation_config=generation_config)
+        # Create an Image object from the raw bytes of the uploaded file.
+        image = vision.Image(content=file_bytes)
         
-        # Load the JSON string from the model's response into a Python dictionary
-        parsed_data = json.loads(response.text)
-        return parsed_data
+        # Specify the feature we want (document text detection).
+        feature = vision.Feature(type_=vision.Feature.Type.DOCUMENT_TEXT_DETECTION)
+        
+        # Construct the request. For PDFs, the API handles page separation automatically.
+        request = vision.AnnotateImageRequest(image=image, features=[feature])
+        
+        # Use the more robust batch_annotate_images method.
+        response = client.batch_annotate_images(requests=[request])
+        
+        # Process the response
+        # The response is a list, one for each image/document in the batch. We only have one.
+        document_response = response.responses[0]
+        if document_response.error.message:
+            raise Exception(f"{document_response.error.message}")
+            
+        return document_response.full_text_annotation.text
 
     except Exception as e:
-        st.error(f"Error parsing receipt with AI model: {e}")
-        # Return a default structure on error so the app doesn't crash
-        return {"vendor": "Error", "date": None, "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+        return f"Error calling Google Vision API: {str(e)}. Please ensure the PDF is not password-protected or corrupted."
 
+# --- DEFINITIVE PARSING LOGIC ---
+def parse_ocr_text(text: str):
+    """Parses OCR text using a robust 'Right-to-Left' classification and a smart 'Look-Back' cleanup pass."""
+    parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-# --- Main Entry Point Function ---
+    # Stage 1: Basic Vendor and Date Extraction
+    if lines:
+        for line in lines[:5]:
+            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+                parsed_data["vendor"] = line
+                break
+    
+    date_pattern = r'(\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2})|(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})'
+    if date_match := re.search(date_pattern, text):
+        parsed_data["date"] = date_match.group(0).strip()
+
+    # Stage 2: Classify all lines that end with a price
+    classified_items = []
+    line_pattern = re.compile(r'^(.*?)\s*([$]?\d+[.,]\d{2})[$]?\s*$')
+
+    total_keywords = ["total"]
+    subtotal_keywords = ["sous-total", "subtotal"]
+    gst_keywords = ["tps", "gst"]
+    pst_keywords = ["tvq", "qst", "pst"]
+    hst_keywords = ["hst", "tvh"]
+
+    for i, line in enumerate(lines):
+        match = line_pattern.match(line)
+        if not match:
+            continue
+
+        description = match.group(1).strip()
+        price = float(match.group(2).replace('$', '').replace(',', '.'))
+        desc_lower = description.lower()
+        
+        item_type = 'item' 
+        if re.search(r'(?i)(?<!sous-)(?<!sub)total', desc_lower):
+            item_type = 'total'
+        elif any(kw in desc_lower for kw in gst_keywords):
+            item_type = 'gst'
+        elif any(kw in desc_lower for kw in pst_keywords):
+            item_type = 'pst'
+        elif any(kw in desc_lower for kw in hst_keywords):
+            item_type = 'hst'
+        elif any(kw in desc_lower for kw in subtotal_keywords):
+            item_type = 'subtotal'
+        
+        classified_items.append({'index': i, 'description': description, 'price': price, 'type': item_type})
+
+    # Stage 3: Assign Financials and intelligently process Line Items
+    processed_indices = set()
+    for item in classified_items:
+        if item['type'] == 'total':
+            parsed_data['total_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'gst':
+            parsed_data['gst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'pst':
+            parsed_data['pst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'hst':
+            parsed_data['hst_amount'] = item['price']
+            processed_indices.add(item['index'])
+        elif item['type'] == 'subtotal':
+            processed_indices.add(item['index'])
+            
+    final_line_items = []
+    item_only_list = sorted([item for item in classified_items if item['type'] == 'item'], key=lambda x: x['index'])
+    
+    for i, current_item in enumerate(item_only_list):
+        description_block_lines = [current_item['description']]
+        previous_item_index = item_only_list[i-1]['index'] if i > 0 else -1
+        lookup_index = current_item['index'] - 1
+
+        while lookup_index > previous_item_index:
+            description_block_lines.insert(0, lines[lookup_index])
+            lookup_index -= 1
+        
+        full_description = " ".join(filter(None, description_block_lines)).strip()
+        
+        if full_description:
+             final_line_items.append({'description': full_description, 'price': current_item['price']})
+
+    parsed_data['line_items'] = final_line_items
+    return parsed_data
+
 def extract_and_parse_file(uploaded_file):
-    """Main pipeline function using Google Vision for OCR and Gemini for parsing."""
+    """Main pipeline function using Google Vision."""
     try:
-        # Step 1: Get high-quality OCR text from Google Vision
         raw_text = extract_text_from_file(uploaded_file)
         if "Error" in raw_text:
              return raw_text, {"error": raw_text}
         
-        # Step 2: Use Gemini to parse the clean text into structured data
-        parsed_data = parse_text_with_gemini(raw_text)
+        parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
-        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
