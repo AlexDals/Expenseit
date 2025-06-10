@@ -3,11 +3,9 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
-# --- CORRECTED AUTHENTICATION GUARD ---
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
-    st.stop() # Stop execution if not authenticated
-# --- END OF CORRECTION ---
+    st.stop()
 
 st.title("📄 Create New Expense Report")
 username = st.session_state.get("username")
@@ -33,7 +31,6 @@ receipt_path_for_db = None
 
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
-        # --- FIX: This line now correctly unpacks the two values from the utility function ---
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
 
         with st.expander("View Raw Extracted Text"):
@@ -49,7 +46,6 @@ if uploaded_receipt is not None:
         if receipt_path_for_db: st.success("Receipt uploaded successfully!")
         else: st.error("Failed to upload receipt.")
 else:
-    # Initialize with a default structure if no file is uploaded
     parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
 
 min_allowed_value = 0.01
@@ -98,21 +94,35 @@ if st.session_state.current_report_items:
     total_report_amount = items_df['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
 
+    # --- NEW, SAFER SUBMISSION LOGIC ---
     if st.button("Submit Entire Report", type="primary"):
         if not report_name:
             st.error("Please provide a Report Name before submitting.")
         else:
             with st.spinner("Submitting report..."):
                 report_id = su.add_report(user_id, report_name, total_report_amount)
+                
                 if report_id:
+                    all_items_saved = True # Assume success at first
                     for item in st.session_state.current_report_items:
-                        su.add_expense_item(
+                        # The function now returns True or False
+                        success = su.add_expense_item(
                             report_id, item['date'], item['vendor'], item['description'], item['amount'],
                             item.get('receipt_path'), item.get('ocr_text'),
                             item.get('gst_amount'), item.get('pst_amount'), item.get('hst_amount')
                         )
-                    st.success(f"Report '{report_name}' submitted successfully!")
-                    st.session_state.current_report_items = []
-                    st.rerun()
+                        if not success:
+                            all_items_saved = False # Mark as failed
+                            break # Stop processing further items
+                    
+                    # Only show success and clear the list if ALL items were saved
+                    if all_items_saved:
+                        st.success(f"Report '{report_name}' submitted successfully!")
+                        st.balloons()
+                        st.session_state.current_report_items = []
+                        st.rerun()
+                    else:
+                        st.error("Critical Error: The report header was saved, but saving one or more expense items failed. Your entered items have NOT been cleared. Please review any errors above and try submitting again.")
+
                 else:
-                    st.error("Failed to create report entry in database.")
+                    st.error("Critical Error: Failed to create the main report entry in the database. Please try again.")
