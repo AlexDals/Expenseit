@@ -1,6 +1,9 @@
 import streamlit as st
 from google.cloud import vision
 import re
+import fitz  # PyMuPDF for PDF handling
+import io
+from PIL import Image
 
 # --- GOOGLE VISION API SETUP ---
 @st.cache_resource
@@ -17,38 +20,46 @@ def get_vision_client():
 # --- DEFINITIVE FILE EXTRACTION LOGIC ---
 def extract_text_from_file(uploaded_file):
     """
-    Extracts text from an image or PDF file by sending the raw bytes directly
-    to the robust Google Vision batch processing endpoint.
+    Extracts text from an image or PDF file using Google Cloud Vision AI.
+    If the file is a PDF, it converts each page to an image before sending.
     """
     client = get_vision_client()
     file_bytes = uploaded_file.getvalue()
     mime_type = uploaded_file.type
     
     try:
-        # Create an Image object from the raw bytes of the uploaded file.
-        image = vision.Image(content=file_bytes)
+        # If it's a PDF, process page by page
+        if mime_type == "application/pdf":
+            full_text = ""
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page_num, page in enumerate(doc):
+                    # Render page to a high-quality PNG image in memory
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    
+                    image = vision.Image(content=img_bytes)
+                    response = client.document_text_detection(image=image)
+                    if response.error.message:
+                        raise Exception(f"Google Vision API error on page {page_num+1}: {response.error.message}")
+                    
+                    full_text += response.full_text_annotation.text + "\n"
+            return full_text
         
-        # Specify the feature we want (document text detection).
-        feature = vision.Feature(type_=vision.Feature.Type.DOCUMENT_TEXT_DETECTION)
+        # If it's an image, send it directly
+        elif mime_type in ["image/png", "image/jpeg", "image/jpg"]:
+            image = vision.Image(content=file_bytes)
+            response = client.document_text_detection(image=image)
+            if response.error.message:
+                raise Exception(response.error.message)
+            return response.full_text_annotation.text
         
-        # Construct the request. For PDFs, the API handles page separation automatically.
-        request = vision.AnnotateImageRequest(image=image, features=[feature])
-        
-        # Use the more robust batch_annotate_images method.
-        response = client.batch_annotate_images(requests=[request])
-        
-        # Process the response
-        # The response is a list, one for each image/document in the batch. We only have one.
-        document_response = response.responses[0]
-        if document_response.error.message:
-            raise Exception(f"{document_response.error.message}")
-            
-        return document_response.full_text_annotation.text
+        else:
+            return "Unsupported file type. Please upload a JPG, PNG, or PDF."
 
     except Exception as e:
-        return f"Error calling Google Vision API: {str(e)}. Please ensure the PDF is not password-protected or corrupted."
+        return f"Error calling Google Vision API: {str(e)}. Please ensure the uploaded file is not corrupted."
 
-# --- DEFINITIVE PARSING LOGIC ---
+# --- DEFINITIVE PARSING LOGIC: CLASSIFY AND CLEANUP ---
 def parse_ocr_text(text: str):
     """Parses OCR text using a robust 'Right-to-Left' classification and a smart 'Look-Back' cleanup pass."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
@@ -57,7 +68,7 @@ def parse_ocr_text(text: str):
     # Stage 1: Basic Vendor and Date Extraction
     if lines:
         for line in lines[:5]:
-            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier", "transaction"]):
                 parsed_data["vendor"] = line
                 break
     
@@ -77,8 +88,7 @@ def parse_ocr_text(text: str):
 
     for i, line in enumerate(lines):
         match = line_pattern.match(line)
-        if not match:
-            continue
+        if not match: continue
 
         description = match.group(1).strip()
         price = float(match.group(2).replace('$', '').replace(',', '.'))
@@ -125,7 +135,8 @@ def parse_ocr_text(text: str):
         lookup_index = current_item['index'] - 1
 
         while lookup_index > previous_item_index:
-            description_block_lines.insert(0, lines[lookup_index])
+            line_to_add = lines[lookup_index]
+            description_block_lines.insert(0, line_to_add)
             lookup_index -= 1
         
         full_description = " ".join(filter(None, description_block_lines)).strip()
@@ -140,7 +151,7 @@ def extract_and_parse_file(uploaded_file):
     """Main pipeline function using Google Vision."""
     try:
         raw_text = extract_text_from_file(uploaded_file)
-        if "Error" in raw_text:
+        if "Error" in raw_text or "Unsupported" in raw_text:
              return raw_text, {"error": raw_text}
         
         parsed_data = parse_ocr_text(raw_text)
