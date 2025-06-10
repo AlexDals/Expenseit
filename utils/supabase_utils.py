@@ -120,7 +120,16 @@ def get_reports_for_user(user_id):
     response = supabase.table('reports').select("*").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
+# Find the broken get_expenses_for_report function in this file...
+# ...and replace it with this corrected version.
+
 def get_expenses_for_report(report_id):
     """Fetches all expense items for a specific report."""
     supabase = init_connection()
-    response = supabase.table('expenses').select("*").
+    try:
+        # FIX: The .eq() filter and .execute() call were missing.
+        response = supabase.table('expenses').select("*").eq('report_id', report_id).execute()
+        return pd.DataFrame(response.data)
+    except Exception as e:
+        st.error(f"Error fetching expense items: {e}")
+        return pd.DataFrame() # Return an empty DataFrame on error
