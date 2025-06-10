@@ -3,9 +3,11 @@ from utils import supabase_utils as su
 import pandas as pd
 import io # Required for in-memory Excel file
 
+# --- CORRECTED AUTHENTICATION GUARD ---
 if not st.session_state.get("authentication_status"):
-    st.warning("Please login to access this page.")
-    st.switch_page("streamlit_app.py")
+    st.warning("Please log in to access this page.")
+    st.stop() # Stop execution if not authenticated
+# --- END OF CORRECTION ---
 
 st.title("🗂️ View Submitted Expense Reports")
 username = st.session_state.get("username")
