@@ -2,6 +2,9 @@ import streamlit as st
 from google.cloud import vision
 import re
 from itertools import combinations
+import fitz  # PyMuPDF
+import io
+from PIL import Image
 
 # --- GOOGLE VISION API SETUP ---
 @st.cache_resource
@@ -17,22 +20,41 @@ def get_vision_client():
 
 def extract_text_from_file(uploaded_file):
     """
-    Extracts text from an image or PDF file by sending it directly to Google Cloud Vision AI.
+    Extracts text from an image or PDF file using Google Cloud Vision AI.
+    If the file is a PDF, it converts each page to an image before sending.
     """
     client = get_vision_client()
     file_bytes = uploaded_file.getvalue()
+    mime_type = uploaded_file.type
     
     try:
-        # Google Vision can handle the raw bytes of both images and PDFs directly.
-        image = vision.Image(content=file_bytes)
+        # If it's a PDF, process page by page
+        if mime_type == "application/pdf":
+            full_text = ""
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page_num, page in enumerate(doc):
+                    # Render page to a high-quality PNG image in memory
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    
+                    image = vision.Image(content=img_bytes)
+                    response = client.document_text_detection(image=image)
+                    if response.error.message:
+                        raise Exception(f"Google Vision API error on page {page_num+1}: {response.error.message}")
+                    
+                    full_text += response.full_text_annotation.text + "\n"
+            return full_text
         
-        # Use DOCUMENT_TEXT_DETECTION for dense text and better layout understanding.
-        response = client.document_text_detection(image=image)
+        # If it's an image, send it directly
+        elif mime_type in ["image/png", "image/jpeg", "image/jpg"]:
+            image = vision.Image(content=file_bytes)
+            response = client.document_text_detection(image=image)
+            if response.error.message:
+                raise Exception(response.error.message)
+            return response.full_text_annotation.text
         
-        if response.error.message:
-            raise Exception(f"{response.error.message}")
-
-        return response.full_text_annotation.text
+        else:
+            return "Unsupported file type. Please upload a JPG, PNG, or PDF."
 
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}. Please ensure the uploaded file is not corrupted."
