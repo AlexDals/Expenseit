@@ -5,9 +5,9 @@ import re
 import fitz  # PyMuPDF
 import cv2  # OpenCV
 import numpy as np
-from itertools import combinations
 
 def preprocess_image_for_ocr(image_bytes):
+    """Advanced preprocessing with perspective correction."""
     try:
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
@@ -55,6 +55,7 @@ def preprocess_image_for_ocr(image_bytes):
         return processed_img_bytes.tobytes()
 
 def extract_text_from_file(uploaded_file):
+    """Extracts text from file using OCR."""
     try:
         file_bytes = uploaded_file.getvalue()
         full_text = ""
@@ -74,58 +75,50 @@ def extract_text_from_file(uploaded_file):
         return f"Error during OCR processing: {str(e)}"
 
 def parse_ocr_text(text: str):
+    """Parses OCR text using targeted, line-by-line regular expressions."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Keyword Definitions ---
-    total_keywords = ["total", "total payable", "total à payer"]
-    subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
-    gst_keywords = ["tps", "gst"]
-    pst_keywords = ["tvq", "qst", "tvp", "pst"]
-    hst_keywords = ["hst", "tvh"]
-    all_financial_keywords = total_keywords + subtotal_keywords + gst_keywords + pst_keywords + hst_keywords
-
-    # --- Line Item and Financial Data Extraction ---
+    # Define specific regex patterns for each field
+    # Using negative lookbehind `(?i)(?<!sous-)(?<!sub)` to find "Total" but not "Sub-total"
+    total_pattern = re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})')
+    subtotal_pattern = re.compile(r'(?i)(?:sous-total|subtotal)[:\s]*([$]?\s*\d+[.,]\d{2})')
+    tps_pattern = re.compile(r'(?i)(?:tps|gst)[:\s]*([$]?\s*\d+[.,]\d{2})')
+    tvq_pattern = re.compile(r'(?i)(?:tvq|qst)[:\s]*([$]?\s*\d+[.,]\d{2})')
+    hst_pattern = re.compile(r'(?i)(?:hst|tvh)[:\s]*([$]?\s*\d+[.,]\d{2})')
     line_item_pattern = re.compile(r'^(.*?)\s+([$]?\d+[.,]\d{2})$')
     
-    for line in lines:
-        line_lower = line.lower()
-        
-        # --- Targeted Value Extraction ---
-        def get_value_from_line(keywords):
-            if any(keyword in line_lower for keyword in keywords):
-                amounts = re.findall(r'(\d+[.,]\d{2})', line)
-                if amounts:
-                    return float(amounts[-1].replace(',', '.'))
-            return None
+    financial_keywords = ["total", "sous-total", "subtotal", "tps", "gst", "tvq", "qst", "hst", "tvh", "ecofrais"]
 
-        # Extract values if keywords are present
-        if (total_val := get_value_from_line(total_keywords)) is not None:
-            parsed_data["total_amount"] = total_val
-        if (gst_val := get_value_from_line(gst_keywords)) is not None:
-            parsed_data["gst_amount"] = gst_val
-        if (pst_val := get_value_from_line(pst_keywords)) is not None:
-            parsed_data["pst_amount"] = pst_val
-        if (hst_val := get_value_from_line(hst_keywords)) is not None:
-            parsed_data["hst_amount"] = hst_val
-            
-        # --- Line Item Extraction ---
-        match = line_item_pattern.match(line)
-        if match and not any(keyword in line_lower for keyword in all_financial_keywords):
+    # --- Data Extraction Pass ---
+    for line in lines:
+        if match := total_pattern.search(line):
+            parsed_data['total_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
+        elif match := tps_pattern.search(line):
+            parsed_data['gst_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
+        elif match := tvq_pattern.search(line):
+            parsed_data['pst_amount'] = float(match.group(1).replace('$', '.'))
+        elif match := hst_pattern.search(line):
+            parsed_data['hst_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
+        elif match := line_item_pattern.match(line):
             description = match.group(1).strip()
-            price = float(match.group(2).replace('$', '').replace(',', '.'))
-            if len(description) > 2 and not description.isupper():
-                parsed_data["line_items"].append({"description": description, "price": price})
+            # Check if the line is likely a line item and not something else
+            if len(description) > 2 and not any(keyword in description.lower() for keyword in financial_keywords):
+                price = float(match.group(2).replace('$', '').replace(',', '.'))
+                # Avoid capturing the subtotal as a line item
+                if not any(sub_kw in description.lower() for sub_kw in subtotal_keywords):
+                    parsed_data["line_items"].append({"description": description, "price": price})
 
     # --- Vendor and Date Extraction ---
     if lines:
-        # Heuristic: First significant capitalized line is often the vendor
-        for line in lines:
-            if len(line) > 3 and line.isupper() and not any(kw in line.lower() for kw in ["invoice", "facture", "date"]):
-                parsed_data["vendor"] = line
-                break
-    
-    date_pattern = r'(\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2})' # General date pattern
+        vendor_candidates = []
+        for line in lines[:5]: # Check top 5 lines for vendor
+            if len(line) > 3 and line.isupper() and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+                vendor_candidates.append(line)
+        if vendor_candidates:
+            parsed_data["vendor"] = sorted(vendor_candidates, key=len, reverse=True)[0]
+
+    date_pattern = r'(?i)(?:Date|facturation|DATE HEURE)[:\s]*((?:\d{1,2}\s+\w+\s+\d{4})|(?:\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2}))'
     date_match = re.search(date_pattern, text)
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
@@ -133,10 +126,11 @@ def parse_ocr_text(text: str):
     return parsed_data
 
 def extract_and_parse_file(uploaded_file):
+    """Main pipeline function."""
     try:
         raw_text = extract_text_from_file(uploaded_file)
         if "Error" in raw_text or "Unsupported" in raw_text:
-            return raw_text, {"error": raw_text}
+             return raw_text, {"error": raw_text}
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
     except Exception as e:
