@@ -18,7 +18,6 @@ if not user_id:
     st.stop()
 
 reports_df = su.get_reports_for_user(user_id)
-
 if reports_df.empty:
     st.info("You have not submitted any expense reports yet.")
 else:
@@ -30,16 +29,12 @@ else:
     if selected_report_display_name != "-- Select a report --":
         selected_report_id = report_options[selected_report_display_name]
         clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', selected_report_display_name.split(' (')[0]).replace(' ', '_')
-
         st.subheader(f"Details for Report: {selected_report_display_name.split(' (')[0]}")
         
         expenses_df = su.get_expenses_for_report(selected_report_id)
-
         if not expenses_df.empty:
-            # Loop through each expense (receipt) in the report and display its details
             for index, row in expenses_df.iterrows():
                 st.markdown(f"#### Expense: {row.get('vendor', 'N/A')} - ${row.get('amount', 0):.2f}")
-                
                 exp_col1, exp_col2 = st.columns(2)
                 with exp_col1:
                     st.write(f"**Date:** {row.get('expense_date', 'N/A')}")
@@ -49,20 +44,17 @@ else:
                     st.write(f"**PST/QST:** ${row.get('pst_amount', 0) or 0:.2f}")
                     st.write(f"**HST/TVH:** ${row.get('hst_amount', 0) or 0:.2f}")
 
-                # Create an expander for line items and the receipt image
                 with st.expander("View Details (Line Items & Receipt)"):
                     line_items = []
-                    if row.get('line_items'):
+                    if row.get('line_items') and isinstance(row['line_items'], str):
                         try:
-                            # The data is stored as a JSON string, so we must load it
                             line_items = json.loads(row['line_items'])
-                        except (json.JSONDecodeError, TypeError):
+                        except json.JSONDecodeError:
                             line_items = []
                     
                     if line_items and isinstance(line_items, list) and len(line_items) > 0:
                         st.write("**Line Items**")
-                        line_items_df = pd.DataFrame(line_items)
-                        st.dataframe(line_items_df)
+                        st.dataframe(pd.DataFrame(line_items))
                     else:
                         st.write("No line items were extracted for this expense.")
 
@@ -70,23 +62,16 @@ else:
                         st.write("**Receipt Image/PDF**")
                         receipt_url = su.get_receipt_public_url(row['receipt_path'])
                         if receipt_url:
-                            # Display images directly, provide a link for PDFs
                             if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')):
                                 st.image(receipt_url)
                             else:
-                                st.markdown(f"[{row['receipt_path'].split('/')[-1]}]({receipt_url})")
+                                st.link_button("Download Receipt File", receipt_url)
                     else:
                         st.write("No receipt was uploaded for this expense.")
-                
                 st.markdown("---")
 
-            # Export buttons for the entire report's data
             st.subheader("Export This Full Report")
-            export_df = expenses_df[[
-                "expense_date", "vendor", "description", "amount", 
-                "gst_amount", "pst_amount", "hst_amount"
-            ]].copy()
-
+            export_df = expenses_df[["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount"]].copy()
             col1, col2 = st.columns(2)
             with col1:
                 csv_data = export_df.to_csv(index=False).encode('utf-8')
