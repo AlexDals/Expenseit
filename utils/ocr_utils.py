@@ -2,7 +2,7 @@ import streamlit as st
 from google.cloud import vision
 import re
 
-# --- GOOGLE VISION API SETUP AND TEXT EXTRACTION (No Changes) ---
+# --- GOOGLE VISION API SETUP ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -27,17 +27,19 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC: SPLIT-AND-PARSE ---
+# --- DEFINITIVE PARSING LOGIC: PARTITION-FIRST ---
 def parse_ocr_text(text: str):
+    """Parses OCR text using a robust block-partitioning system."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
     # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
         for line in lines[:5]:
-            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+            if len(line) > 2 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
                 parsed_data["vendor"] = line
                 break
+    
     date_pattern = r'(\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2})|(\d{1,2}[-/\s]\d{1,2}[-/\s]\d{2,4})'
     if date_match := re.search(date_pattern, text):
         parsed_data["date"] = date_match.group(0).strip()
@@ -57,60 +59,53 @@ def parse_ocr_text(text: str):
                 financial_line_indices.add(i)
 
     # --- Stage 3: Split-and-Parse Line Item Extraction ---
+    # Isolate only the lines that could possibly be part of an item
     item_lines_text = "\n".join([lines[i] for i in range(len(lines)) if i not in financial_line_indices])
     
-    # Use a lookahead in re.split to keep the separator at the start of each new block
-    # The separator is a line starting with a single digit, a space, and a capital letter/number code.
+    # A separator is a line starting with a single digit, a space, and a capital letter/number code.
     item_separator_pattern = r'\n(?=\d\s+[A-Z0-9])'
+    # Split the text into blocks based on the separator
     item_blocks = re.split(item_separator_pattern, item_lines_text)
     
     final_line_items = []
-    price_pattern = re.compile(r'(\d+[.,]\d{2})$')
+    price_pattern = re.compile(r'(\d+[.,]\d{2})')
 
     for block in item_blocks:
         if not block.strip():
             continue
         
-        block_lines = [line.strip() for line in block.split('\n') if line.strip()]
-        price = 0.0
-        description_parts = []
-        
-        # Find the single price in the block
-        for line in block_lines:
-            if match := price_pattern.search(line):
-                # Heuristic: The largest number in a block is likely the price
-                price = max(price, float(match.group(1).replace(',', '.')))
-
-        # All lines that are not the price contribute to the description
-        if price > 0:
-            for line in block_lines:
-                # Remove the price from the line to get the description part
-                desc_part = line.replace(str(price), "").replace(f"{price:.2f}".replace('.',','), "").strip()
-                if desc_part:
-                    description_parts.append(desc_part)
+        # Find all numbers in the block and assume the largest is the price
+        all_amounts_in_block = [float(p.replace(',', '.')) for p in price_pattern.findall(block)]
+        if not all_amounts_in_block:
+            continue
             
-            # Smartly select the best description from the collected parts
-            full_description = " ".join(description_parts)
-            best_description = ""
-            if "HP ProBook" in full_description:
-                best_description = next((l for l in description_parts if "HP ProBook" in l), full_description)
-            elif "Frais de gestion" in full_description:
-                best_description = "Frais de gestion de l'environnement"
-            elif "TeamGroup" in full_description:
-                best_description = next((l for l in description_parts if "TeamGroup" in l), full_description)
-            else:
-                best_description = description_parts[0] if description_parts else "N/A"
-                
-            final_line_items.append({"description": best_description.strip(), "price": price})
+        price = max(all_amounts_in_block)
+        
+        # The description is the entire block, cleaned up
+        description_lines = []
+        for line in block.split('\n'):
+            # Remove the price from the line to avoid including it in the description
+            line_without_price = re.sub(r'[$]?\d+[.,]\d{2}[$]?', '', line).strip()
+            if line_without_price:
+                description_lines.append(line_without_price)
+        
+        full_description = " ".join(description_lines)
+        
+        # Add heuristics to select the most relevant part of the description
+        if "HP ProBook" in full_description:
+            best_description = next((l for l in description_lines if "HP ProBook" in l), full_description)
+        elif "Frais de gestion" in full_description:
+            best_description = next((l for l in description_lines if "Frais de gestion" in l), full_description)
+        elif "TeamGroup" in full_description:
+            best_description = next((l for l in description_lines if "TeamGroup" in l), full_description)
+        else:
+            # Default to the first line of the block (often the part number)
+            best_description = description_lines[0] if description_lines else "N/A"
+        
+        final_line_items.append({"description": best_description.strip(), "price": price})
 
     parsed_data['line_items'] = final_line_items
     
-    # Fallback for total if keyword search failed
-    if parsed_data.get("total_amount", 0.0) == 0.0:
-        all_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)]
-        if all_amounts:
-            parsed_data["total_amount"] = max(all_amounts)
-
     return parsed_data
 
 
@@ -123,7 +118,6 @@ def extract_and_parse_file(uploaded_file):
         
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
-        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
