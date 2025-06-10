@@ -29,6 +29,9 @@ uploaded_receipt = st.file_uploader(
 parsed_data = {}
 receipt_path_for_db = None
 
+# ... (imports and code at the top of the file remain the same) ...
+# Replace the section from "if uploaded_receipt is not None:" to the end of the file.
+
 if uploaded_receipt is not None:
     with st.spinner("Processing OCR and uploading receipt..."):
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
@@ -46,7 +49,42 @@ if uploaded_receipt is not None:
         if receipt_path_for_db: st.success("Receipt uploaded successfully!")
         else: st.error("Failed to upload receipt.")
 else:
-    parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0}
+    parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+
+# --- NEW: Display Line Items if they exist ---
+if parsed_data.get("line_items"):
+    st.markdown("---")
+    st.subheader("Extracted Line Items")
+    st.dataframe(pd.DataFrame(parsed_data["line_items"]))
+    st.markdown("---")
+
+
+min_allowed_value = 0.01
+
+with st.form("expense_item_form", clear_on_submit=True):
+    # ... (form code remains largely the same, just ensure values are pulled from parsed_data)
+    col1, col2 = st.columns(2)
+    with col1:
+        # ... (date, vendor, description inputs) ...
+    with col2:
+        # ... (amount and tax inputs) ...
+# ... (rest of the form and submission logic) ...
+
+# In the submission logic, make sure to pass the line_items
+# ... inside `if submitted_item and vendor and amount > 0:`
+    new_item = {
+        # ... other fields
+        "line_items": parsed_data.get("line_items")
+    }
+    st.session_state.current_report_items.append(new_item)
+#...
+
+# ... inside the final submit button logic ...
+    # ... in the loop `for item in st.session_state.current_report_items:`
+    success = su.add_expense_item(
+        # ... other fields
+        item.get('line_items')
+    )
 
 min_allowed_value = 0.01
 
