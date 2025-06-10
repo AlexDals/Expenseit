@@ -6,5 +6,5 @@ pytesseract
 bcrypt
 supabase
 PyMuPDF
-opencv-python-headless
 openpyxl
+google-cloud-vision
