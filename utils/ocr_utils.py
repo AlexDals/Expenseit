@@ -64,8 +64,8 @@ def parse_ocr_text(text: str):
     item_lines_text = "\n".join([lines[i] for i in range(len(lines)) if i not in financial_line_indices])
     
     # A separator is a line starting with a single digit, a space, and a capital letter/number code.
-    # We use a lookahead `(?=...)` in re.split to keep the separator as the start of the next block.
-    item_separator_pattern = r'(?=\n\d\s+[A-Z0-9])'
+    item_separator_pattern = r'\n(?=\d\s+[A-Z0-9])'
+    # Split the text into blocks based on the separator
     item_blocks = re.split(item_separator_pattern, item_lines_text)
     
     final_line_items = []
@@ -76,25 +76,31 @@ def parse_ocr_text(text: str):
         if not block:
             continue
         
+        # Find the single largest number in the block and assume it's the price
         all_amounts_in_block = [float(p.replace(',', '.')) for p in price_pattern.findall(block)]
         if not all_amounts_in_block:
             continue
             
         price = max(all_amounts_in_block)
         
-        # Heuristic: The best description is the longest line in the block that is not all-caps
-        description_lines = [line.strip() for line in block.split('\n') if line.strip()]
+        # The description is the entire block, cleaned up
+        description_lines = []
+        for line in block.split('\n'):
+            # Remove the price from the line to avoid including it in the description
+            cleaned_line = re.sub(r'\s*[$]?'+re.escape(f"{price:.2f}")+r'[$]?', '', line, flags=re.IGNORECASE).strip()
+            if cleaned_line:
+                description_lines.append(cleaned_line)
         
+        # Smartly select the best description from the collected parts
+        full_description = " ".join(description_lines)
         best_description = ""
-        # Prefer longer lines that are not all-caps (which are often product codes)
-        human_readable_lines = [l for l in description_lines if not (l.isupper() and len(l.split()) < 4) and not price_pattern.search(l)]
         
+        # Heuristic to find a human-readable description over product codes
+        human_readable_lines = [l for l in description_lines if not (l.isupper() and len(l.split()) < 4)]
         if human_readable_lines:
             best_description = max(human_readable_lines, key=len)
-        else: # Fallback to the first line of the block if all are codes/caps
-            # Clean the first line from any price
-            first_line_cleaned = re.sub(r'\s*[$]?\d+[.,]\d{2}[$]?\s*$', '', block_lines[0]).strip()
-            best_description = first_line_cleaned if first_line_cleaned else "N/A"
+        elif description_lines: # Fallback to the first line if all are codes/caps
+            best_description = description_lines[0]
             
         final_line_items.append({"description": best_description.strip(), "price": price})
 
