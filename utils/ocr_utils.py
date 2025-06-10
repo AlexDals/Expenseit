@@ -8,18 +8,26 @@ import numpy as np
 from itertools import combinations
 
 def preprocess_image_for_ocr(image_bytes):
-    """Advanced preprocessing with perspective correction."""
+    """Advanced preprocessing with perspective correction and resizing."""
     try:
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        width = int(img.shape[1] * 2)
-        height = int(img.shape[0] * 2)
-        resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
+        
+        # Resizing can help with small text
+        scale_percent = 200 # percent of original size
+        width = int(img.shape[1] * scale_percent / 100)
+        height = int(img.shape[0] * scale_percent / 100)
+        dim = (width, height)
+        resized = cv2.resize(gray, dim, interpolation = cv2.INTER_CUBIC)
+
+        # Use Otsu's thresholding which is great for varying lighting
         _, final_img = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
         _, processed_img_bytes = cv2.imencode('.png', final_img)
         return processed_img_bytes.tobytes()
     except Exception:
+        # Fallback to a simpler method
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -55,13 +63,11 @@ def parse_ocr_text(text: str):
 
     # --- Stage 1: Basic Field Extraction ---
     if lines:
-        vendor_candidates = []
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
-                vendor_candidates.append(line)
-        if vendor_candidates:
-            parsed_data["vendor"] = sorted(vendor_candidates, key=len, reverse=True)[0]
-
+                parsed_data["vendor"] = line
+                break
+    
     date_pattern = r'(\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2})'
     date_match = re.search(date_pattern, text)
     if date_match:
@@ -84,7 +90,6 @@ def parse_ocr_text(text: str):
                     break
         
         if subtotal == 0.0 and len(all_amounts) > 1:
-            # Fallback: Assume subtotal is the second-largest number
             subtotal = all_amounts[1]
         
         expected_tax_sum = round(grand_total - subtotal, 2)
@@ -103,46 +108,48 @@ def parse_ocr_text(text: str):
                 if len(validated_taxes) == 1:
                     parsed_data["hst_amount"] = validated_taxes[0]
                 elif len(validated_taxes) >= 2:
+                    # Assign smaller to GST, larger to PST
                     parsed_data["gst_amount"] = validated_taxes[0]
                     parsed_data["pst_amount"] = validated_taxes[1]
 
     # --- Stage 3: Stateful Line Item Extraction ---
     line_items = []
     current_description_lines = []
-    stop_keywords = ["ecofrais", "sous-total", "subtotal"]
+    # Keywords that indicate the end of the items section
+    stop_keywords = ["ecofrais", "sous-total", "subtotal", "tax", "tps", "tvq", "gst", "pst", "hst"]
     
-    # Heuristic: Find where the items likely start (e.g., after a clear separator or header)
-    start_index = 0
-    for i, line in enumerate(lines):
-        if "description" in line.lower() or "quantit" in line.lower():
-            start_index = i + 1
+    money_pattern = re.compile(r'(\d+[.,]\d{2})$')
+
+    for line in lines:
+        # Stop processing if we hit the summary section
+        if any(keyword in line.lower() for keyword in stop_keywords):
+            # Before stopping, check if there's a pending description block
+            if current_description_lines:
+                # This handles cases where a price is on the same line as a stop keyword
+                if match := money_pattern.search(line):
+                    price = float(match.group(1).replace(',', '.'))
+                    full_description = " ".join(current_description_lines)
+                    line_items.append({"description": full_description, "price": price})
             break
 
-    for line in lines[start_index:]:
-        line_lower = line.lower()
-        if any(keyword in line_lower for keyword in stop_keywords):
-            break
-
-        # A typical line item has text on the left and a price on the right
-        match = re.search(r'([\d.,]+\d{2})$', line)
+        # Check if the line seems to end with a price
+        match = money_pattern.search(line)
         
         if match:
-            price_str = match.group(1).replace(',', '.')
-            price = float(price_str)
-            
-            # Check if this price is one of the main financial numbers to avoid adding them as line items
-            if abs(price - parsed_data["total_amount"]) < 0.02 or abs(price - subtotal) < 0.02:
-                continue
-
+            price = float(match.group(1).replace(',', '.'))
             description_part = line[:match.start()].strip()
-            current_description_lines.append(description_part)
-            full_description = " ".join(filter(None, current_description_lines))
             
-            if full_description:
+            # If there was a description building up, this price belongs to it
+            if current_description_lines:
+                current_description_lines.append(description_part)
+                full_description = " ".join(filter(None, current_description_lines))
                 line_items.append({"description": full_description, "price": price})
-            
-            current_description_lines = [] # Reset for next item
+                current_description_lines = [] # Reset
+            # If no prior description, this is a single-line item
+            elif description_part:
+                line_items.append({"description": description_part, "price": price})
         else:
+            # If no price, it's part of a description
             if len(line.strip()) > 1:
                 current_description_lines.append(line.strip())
 
