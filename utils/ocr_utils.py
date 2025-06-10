@@ -5,6 +5,7 @@ import re
 import fitz  # PyMuPDF
 import cv2  # OpenCV
 import numpy as np
+from itertools import combinations
 
 def preprocess_image_for_ocr(image_bytes):
     """Advanced preprocessing with perspective correction."""
@@ -12,41 +13,15 @@ def preprocess_image_for_ocr(image_bytes):
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        blur = cv2.GaussianBlur(gray, (5, 5), 0)
-        edged = cv2.Canny(blur, 75, 200)
-        contours, _ = cv2.findContours(edged.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
-        screen_contour = None
-        for c in contours:
-            peri = cv2.arcLength(c, True)
-            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
-            if len(approx) == 4:
-                screen_contour = approx
-                break
-        if screen_contour is not None:
-            pts = screen_contour.reshape(4, 2)
-            rect = np.zeros((4, 2), dtype="float32")
-            s = pts.sum(axis=1)
-            rect[0] = pts[np.argmin(s)]; rect[2] = pts[np.argmax(s)]
-            diff = np.diff(pts, axis=1)
-            rect[1] = pts[np.argmin(diff)]; rect[3] = pts[np.argmax(diff)]
-            (tl, tr, br, bl) = rect
-            widthA = np.sqrt(((br[0] - bl[0]) ** 2) + ((br[1] - bl[1]) ** 2))
-            widthB = np.sqrt(((tr[0] - tl[0]) ** 2) + ((tr[1] - tl[1]) ** 2))
-            maxWidth = max(int(widthA), int(widthB))
-            heightA = np.sqrt(((tr[0] - br[0]) ** 2) + ((tr[1] - br[1]) ** 2))
-            heightB = np.sqrt(((tl[0] - bl[0]) ** 2) + ((tl[1] - bl[1]) ** 2))
-            maxHeight = max(int(heightA), int(heightB))
-            dst = np.array([[0, 0], [maxWidth - 1, 0], [maxWidth - 1, maxHeight - 1], [0, maxHeight - 1]], dtype="float32")
-            M = cv2.getPerspectiveTransform(rect, dst)
-            warped = cv2.warpPerspective(img, M, (maxWidth, maxHeight))
-            output_img = cv2.cvtColor(warped, cv2.COLOR_BGR_GRAY)
-        else:
-            output_img = gray
-        _, final_img = cv2.threshold(output_img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Increase scale for better detail recognition
+        width = int(img.shape[1] * 2)
+        height = int(img.shape[0] * 2)
+        resized = cv2.resize(gray, (width, height), interpolation=cv2.INTER_CUBIC)
+        _, final_img = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         _, processed_img_bytes = cv2.imencode('.png', final_img)
         return processed_img_bytes.tobytes()
     except Exception:
+        # Fallback to a simpler method if advanced processing fails
         img_array = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -54,11 +29,13 @@ def preprocess_image_for_ocr(image_bytes):
         _, processed_img_bytes = cv2.imencode('.png', thresh)
         return processed_img_bytes.tobytes()
 
+
 def extract_text_from_file(uploaded_file):
     """Extracts text from file using OCR."""
     try:
         file_bytes = uploaded_file.getvalue()
         full_text = ""
+        # PSM 6 is generally better for blocks of text like receipts
         custom_config = r'--oem 3 --psm 6'
         if uploaded_file.type == "application/pdf":
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
@@ -75,53 +52,85 @@ def extract_text_from_file(uploaded_file):
         return f"Error during OCR processing: {str(e)}"
 
 def parse_ocr_text(text: str):
-    """Parses OCR text using targeted, line-by-line regular expressions."""
+    """Parses OCR text using the 'Numbers First' mathematical deduction method."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # Define specific regex patterns for each field
-    # Using negative lookbehind `(?i)(?<!sous-)(?<!sub)` to find "Total" but not "Sub-total"
-    total_pattern = re.compile(r'(?i)(?<!sous-)(?<!sub)total[:\s]*([$]?\s*\d+[.,]\d{2})')
-    subtotal_pattern = re.compile(r'(?i)(?:sous-total|subtotal)[:\s]*([$]?\s*\d+[.,]\d{2})')
-    tps_pattern = re.compile(r'(?i)(?:tps|gst)[:\s]*([$]?\s*\d+[.,]\d{2})')
-    tvq_pattern = re.compile(r'(?i)(?:tvq|qst)[:\s]*([$]?\s*\d+[.,]\d{2})')
-    hst_pattern = re.compile(r'(?i)(?:hst|tvh)[:\s]*([$]?\s*\d+[.,]\d{2})')
-    line_item_pattern = re.compile(r'^(.*?)\s+([$]?\d+[.,]\d{2})$')
-    
-    financial_keywords = ["total", "sous-total", "subtotal", "tps", "gst", "tvq", "qst", "hst", "tvh", "ecofrais"]
-
-    # --- Data Extraction Pass ---
-    for line in lines:
-        if match := total_pattern.search(line):
-            parsed_data['total_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
-        elif match := tps_pattern.search(line):
-            parsed_data['gst_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
-        elif match := tvq_pattern.search(line):
-            parsed_data['pst_amount'] = float(match.group(1).replace('$', '.'))
-        elif match := hst_pattern.search(line):
-            parsed_data['hst_amount'] = float(match.group(1).replace('$', '').replace(',', '.'))
-        elif match := line_item_pattern.match(line):
-            description = match.group(1).strip()
-            # Check if the line is likely a line item and not something else
-            if len(description) > 2 and not any(keyword in description.lower() for keyword in financial_keywords):
-                price = float(match.group(2).replace('$', '').replace(',', '.'))
-                # Avoid capturing the subtotal as a line item
-                if not any(sub_kw in description.lower() for sub_kw in subtotal_keywords):
-                    parsed_data["line_items"].append({"description": description, "price": price})
-
-    # --- Vendor and Date Extraction ---
+    # --- Stage 1: Basic Vendor and Date Extraction ---
     if lines:
         vendor_candidates = []
-        for line in lines[:5]: # Check top 5 lines for vendor
-            if len(line) > 3 and line.isupper() and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+        for line in lines[:5]: # Check top 5 lines
+            # A good vendor name is usually short, capitalized, and has no digits.
+            if len(line) > 3 and len(line) < 30 and line.upper() == line and not any(char.isdigit() for char in line):
                 vendor_candidates.append(line)
         if vendor_candidates:
             parsed_data["vendor"] = sorted(vendor_candidates, key=len, reverse=True)[0]
 
-    date_pattern = r'(?i)(?:Date|facturation|DATE HEURE)[:\s]*((?:\d{1,2}\s+\w+\s+\d{4})|(?:\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2}))'
+    date_pattern = r'(\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2})'
     date_match = re.search(date_pattern, text)
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
+    
+    # --- Stage 2: "Numbers First" Mathematical Parsing ---
+    all_amounts = sorted(list(set([float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)])), reverse=True)
+    
+    if len(all_amounts) >= 2:
+        # Assumption 1: Grand Total is the largest number on the receipt.
+        grand_total = all_amounts[0]
+        parsed_data["total_amount"] = grand_total
+        
+        # Assumption 2: Subtotal is the second largest number.
+        subtotal = all_amounts[1]
+        
+        # Assumption 3: The sum of taxes can be deduced.
+        expected_tax_sum = round(grand_total - subtotal, 2)
+        
+        # Find all other smaller numbers that could be tax components.
+        tax_candidates = [amt for amt in all_amounts if amt < subtotal]
+        
+        validated_taxes = []
+        if expected_tax_sum > 0:
+            # Find a combination of candidates that perfectly adds up to the expected tax sum.
+            for i in range(1, 4): # Check for 1, 2, or 3 taxes
+                for combo in combinations(tax_candidates, i):
+                    if abs(sum(combo) - expected_tax_sum) < 0.02: # 2 cent tolerance for rounding
+                        validated_taxes = sorted(list(combo))
+                        break
+                if validated_taxes:
+                    break
+        
+        # --- Stage 3: Assign validated taxes ---
+        if validated_taxes:
+            # If a single tax matches the sum, it could be HST.
+            if len(validated_taxes) == 1:
+                if any(keyword in text.lower() for keyword in ["hst", "tvh"]):
+                     parsed_data["hst_amount"] = validated_taxes[0]
+                else: # Otherwise, assume it's a lone GST/PST.
+                     parsed_data["gst_amount"] = validated_taxes[0]
+            # If two taxes are found, assume smaller is GST, larger is PST.
+            elif len(validated_taxes) >= 2:
+                parsed_data["gst_amount"] = validated_taxes[0]
+                parsed_data["pst_amount"] = validated_taxes[1]
+
+    # --- Stage 4: Line Item Extraction ---
+    # Heuristic: A line item is a line with a number that is NOT a found total or tax.
+    found_financials = [parsed_data['total_amount'], subtotal, *validated_taxes]
+    
+    for line in lines:
+        line_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
+        if len(line_amounts) == 1:
+            price = line_amounts[0]
+            # Check if this price is one of our main financial numbers
+            is_financial = False
+            for fin_val in found_financials:
+                if abs(price - fin_val) < 0.02:
+                    is_financial = True
+                    break
+            
+            if not is_financial:
+                description = line.replace(str(price), '').replace('$', '').strip()
+                if len(description) > 3:
+                    parsed_data["line_items"].append({"description": description, "price": price})
 
     return parsed_data
 
