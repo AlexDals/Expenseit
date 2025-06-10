@@ -3,12 +3,10 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
-# --- AUTHENTICATION GUARD ---
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
 
-# --- PAGE SETUP ---
 st.title("📄 Create New Expense Report")
 username = st.session_state.get("username")
 user_id = su.get_user_id_by_username(username)
@@ -20,53 +18,32 @@ if not user_id:
 if 'current_report_items' not in st.session_state:
     st.session_state.current_report_items = []
 
-# --- MAIN UI ---
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Office Supplies - June")
 st.subheader("Add Expense/Receipt")
+uploaded_receipt = st.file_uploader("Upload Receipt (Image or PDF)", type=["png", "jpg", "jpeg", "pdf"])
 
-uploaded_receipt = st.file_uploader(
-    "Upload Receipt (Image or PDF)",
-    type=["png", "jpg", "jpeg", "pdf"]
-)
-
-# Initialize variables
-parsed_data = {}
-raw_text = ""
-receipt_path_for_db = None
+parsed_data, raw_text, receipt_path_for_db = {}, "", None
 
 if uploaded_receipt:
     with st.spinner("Processing OCR and uploading receipt..."):
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
-
         with st.expander("View Raw Extracted Text"):
             st.text_area("OCR Output", raw_text, height=300)
-
         if "error" in parsed_data:
-            st.error(parsed_data["error"])
-            parsed_data = {} 
+            st.error(parsed_data["error"]); parsed_data = {}
         else:
             st.success("OCR processing complete. Please verify the extracted values.")
-        
         receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
-        if receipt_path_for_db: 
-            st.success("Receipt uploaded successfully!")
-        else: 
-            st.error("Failed to upload receipt.")
+        if receipt_path_for_db: st.success("Receipt uploaded successfully!")
+        else: st.error("Failed to upload receipt.")
 else:
-    # Default structure to prevent errors when no file is uploaded
     parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
 
-# --- OCR & LINE ITEM DISPLAY ---
 if parsed_data.get("line_items"):
-    st.markdown("---")
-    st.subheader("Extracted Line Items")
-    st.dataframe(pd.DataFrame(parsed_data["line_items"]))
-    st.markdown("---")
+    st.markdown("---"); st.subheader("Extracted Line Items")
+    st.dataframe(pd.DataFrame(parsed_data["line_items"])); st.markdown("---")
 
-
-# --- FORM FOR ADDING ITEM ---
 min_allowed_value = 0.01
-
 with st.form("expense_item_form", clear_on_submit=True):
     st.write("Verify the extracted data below and add this expense to the report.")
     col1, col2 = st.columns(2)
@@ -74,15 +51,12 @@ with st.form("expense_item_form", clear_on_submit=True):
         parsed_timestamp = pd.to_datetime(parsed_data.get("date"), errors='coerce')
         initial_date = date.today() if pd.isna(parsed_timestamp) else parsed_timestamp.date()
         expense_date = st.date_input("Expense Date", value=initial_date)
-        
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
         description = st.text_area("Description (Overall expense purpose)", placeholder="e.g., Monthly office supplies")
-        
     with col2:
         ocr_amount = float(parsed_data.get("total_amount", 0.0))
         initial_value = max(min_allowed_value, ocr_amount)
         amount = st.number_input("Amount (Total)", min_value=min_allowed_value, value=initial_value, format="%.2f")
-
         st.markdown("###### Taxes (Editable)")
         tax_col1, tax_col2, tax_col3 = st.columns(3)
         with tax_col1:
@@ -91,7 +65,6 @@ with st.form("expense_item_form", clear_on_submit=True):
             pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
         with tax_col3:
             hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
-        
     submitted_item = st.form_submit_button("Add Item to Report")
     if submitted_item and vendor and amount > 0:
         new_item = {
@@ -104,19 +77,15 @@ with st.form("expense_item_form", clear_on_submit=True):
         st.session_state.current_report_items.append(new_item)
         st.success(f"Added: {vendor} - ${amount:.2f}")
 
-# --- CURRENT REPORT DISPLAY & SUBMISSION ---
 if st.session_state.current_report_items:
-    st.markdown("---")
-    st.subheader("Current Report Items to be Submitted")
+    st.markdown("---"); st.subheader("Current Report Items to be Submitted")
     display_cols = ['date', 'vendor', 'description', 'gst_amount', 'pst_amount', 'hst_amount', 'amount']
     items_df = pd.DataFrame(st.session_state.current_report_items)
     st.dataframe(items_df[display_cols])
     total_report_amount = items_df['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
-
     if st.button("Submit Entire Report", type="primary"):
-        if not report_name:
-            st.error("Please provide a Report Name before submitting.")
+        if not report_name: st.error("Please provide a Report Name before submitting.")
         else:
             with st.spinner("Submitting report..."):
                 report_id = su.add_report(user_id, report_name, total_report_amount)
@@ -129,16 +98,9 @@ if st.session_state.current_report_items:
                             item.get('gst_amount'), item.get('pst_amount'), item.get('hst_amount'),
                             item.get('line_items')
                         )
-                        if not success:
-                            all_items_saved = False
-                            break
-                    
+                        if not success: all_items_saved = False; break
                     if all_items_saved:
-                        st.success(f"Report '{report_name}' submitted successfully!")
-                        st.balloons()
-                        st.session_state.current_report_items = []
-                        st.rerun()
-                    else:
-                        st.error("Critical Error: The report header was saved, but saving one or more expense items failed. Your entered items have NOT been cleared. Please review any errors above and try submitting again.")
-                else:
-                    st.error("Critical Error: Failed to create the main report entry in the database. Please try again.")
+                        st.success(f"Report '{report_name}' submitted successfully!"); st.balloons()
+                        st.session_state.current_report_items = []; st.rerun()
+                    else: st.error("Critical Error: Failed to save one or more items...")
+                else: st.error("Critical Error: Failed to create main report entry...")
