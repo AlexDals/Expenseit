@@ -5,6 +5,5 @@ Pillow
 pytesseract
 bcrypt
 supabase
-PyMuPDF
 openpyxl
 google-cloud-vision
