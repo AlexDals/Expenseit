@@ -2,9 +2,12 @@ import streamlit as st
 from google.cloud import vision
 import re
 from itertools import combinations
-import fitz  # PyMuPDF for PDF handling
+import fitz  # PyMuPDF
 import io
 from PIL import Image
+import cv2   # OpenCV for image processing
+import numpy as np
+
 
 # --- GOOGLE VISION API SETUP ---
 @st.cache_resource
@@ -18,27 +21,51 @@ def get_vision_client():
         st.error(f"Could not initialize Google Vision API client: {e}. Please check your Streamlit secrets.")
         st.stop()
 
+# --- UNIVERSAL IMAGE PREPROCESSOR ---
+def preprocess_image(image_bytes):
+    """
+    Takes any image bytes and converts them into a clean, high-contrast
+    black and white image suitable for OCR.
+    """
+    try:
+        img_array = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        # Convert to grayscale
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # Apply a threshold to get a black and white image
+        # Otsu's binarization is great for automatically finding the best threshold
+        _, final_img = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        # Encode the processed image back to PNG bytes
+        _, processed_img_bytes = cv2.imencode('.png', final_img)
+        return processed_img_bytes.tobytes()
+    except Exception as e:
+        # If preprocessing fails, return original bytes and hope for the best
+        st.warning(f"Image preprocessing failed: {e}. Using original image data.")
+        return image_bytes
+
 # --- DEFINITIVE FILE EXTRACTION LOGIC ---
 def extract_text_from_file(uploaded_file):
     """
     Extracts text from an image or PDF file using Google Cloud Vision AI.
-    If the file is a PDF, it converts each page to an image before sending.
+    It ensures all inputs are converted to clean images before being sent to the API.
     """
     client = get_vision_client()
     file_bytes = uploaded_file.getvalue()
     mime_type = uploaded_file.type
     
     try:
-        # If it's a PDF, process page by page
+        # If it's a PDF, convert each page to a preprocessed image
         if mime_type == "application/pdf":
             full_text = ""
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                 for page_num, page in enumerate(doc):
-                    # Render page to a high-quality PNG image in memory
                     pix = page.get_pixmap(dpi=300)
                     img_bytes = pix.tobytes("png")
                     
-                    image = vision.Image(content=img_bytes)
+                    # Preprocess the rendered page image
+                    processed_bytes = preprocess_image(img_bytes)
+                    
+                    image = vision.Image(content=processed_bytes)
                     response = client.document_text_detection(image=image)
                     if response.error.message:
                         raise Exception(f"Google Vision API error on page {page_num+1}: {response.error.message}")
@@ -46,9 +73,10 @@ def extract_text_from_file(uploaded_file):
                     full_text += response.full_text_annotation.text + "\n"
             return full_text
         
-        # If it's an image, send it directly
+        # If it's an image, preprocess it before sending
         elif mime_type in ["image/png", "image/jpeg", "image/jpg"]:
-            image = vision.Image(content=file_bytes)
+            processed_bytes = preprocess_image(file_bytes)
+            image = vision.Image(content=processed_bytes)
             response = client.document_text_detection(image=image)
             if response.error.message:
                 raise Exception(response.error.message)
@@ -60,20 +88,17 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}. Please ensure the uploaded file is not corrupted."
 
-# --- DEFINITIVE PARSING LOGIC: RIGHT-TO-LEFT ---
+# --- PARSING LOGIC (This is our stable 'Right-to-Left' parser) ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using targeted, line-by-line regular expressions."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # Keyword Definitions
     total_keywords = ["total"]
     subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
     gst_keywords = ["tps", "gst", "federal tax", "taxe fédérale"]
     pst_keywords = ["tvq", "qst", "tvp", "pst", "provincial tax", "taxe provinciale"]
     hst_keywords = ["hst", "tvh"]
     
-    # Line-by-Line Classification
     line_pattern = re.compile(r'^(.*?)\s*[$]?(\d+[.,]\d{2})[$]?\s*$', re.IGNORECASE)
 
     for line in lines:
@@ -97,7 +122,6 @@ def parse_ocr_text(text: str):
                 if len(description) > 1 and "merci" not in desc_lower and "approved" not in desc_lower:
                     parsed_data["line_items"].append({'description': description, 'price': price})
 
-    # Vendor and Date Post-Processing
     if lines:
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier", "transaction"]):
@@ -112,7 +136,6 @@ def parse_ocr_text(text: str):
 
 # --- Main Entry Point Function ---
 def extract_and_parse_file(uploaded_file):
-    """Main pipeline function using Google Vision."""
     try:
         raw_text = extract_text_from_file(uploaded_file)
         if "Error" in raw_text:
@@ -120,7 +143,6 @@ def extract_and_parse_file(uploaded_file):
         
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
-        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
