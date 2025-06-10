@@ -6,3 +6,4 @@ bcrypt
 supabase
 openpyxl
 google-cloud-vision
+PyMuPDF
