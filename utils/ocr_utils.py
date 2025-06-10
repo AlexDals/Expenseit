@@ -1,70 +1,59 @@
-import pytesseract
-from PIL import Image
+import streamlit as st
+from google.cloud import vision
+import pandas as pd
+from datetime import date
 import io
 import re
-import fitz  # PyMuPDF
-import cv2  # OpenCV
-import numpy as np
 from itertools import combinations
+import json
 
-def preprocess_image_for_ocr(image_bytes):
-    """Advanced preprocessing with perspective correction and resizing."""
+# --- GOOGLE VISION API SETUP ---
+@st.cache_resource
+def get_vision_client():
+    """Initializes and returns a Google Vision API client using credentials from st.secrets."""
     try:
-        img_array = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        
-        # Resizing can help with small text
-        scale_percent = 200 # percent of original size
-        width = int(img.shape[1] * scale_percent / 100)
-        height = int(img.shape[0] * scale_percent / 100)
-        dim = (width, height)
-        resized = cv2.resize(gray, dim, interpolation = cv2.INTER_CUBIC)
-
-        # Use Otsu's thresholding which is great for varying lighting
-        _, final_img = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
-        _, processed_img_bytes = cv2.imencode('.png', final_img)
-        return processed_img_bytes.tobytes()
-    except Exception:
-        # Fallback to a simpler method
-        img_array = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        _, processed_img_bytes = cv2.imencode('.png', thresh)
-        return processed_img_bytes.tobytes()
-
+        # The st.secrets object acts like a dictionary
+        credentials_dict = dict(st.secrets.google_credentials)
+        # The google-cloud-vision library expects credentials from a file or a dictionary
+        client = vision.ImageAnnotatorClient.from_service_account_info(credentials_dict)
+        return client
+    except Exception as e:
+        st.error(f"Could not initialize Google Vision API client: {e}. Please check your Streamlit secrets.")
+        st.stop()
 
 def extract_text_from_file(uploaded_file):
-    """Extracts text from file using OCR."""
+    """
+    Extracts text from an image or PDF file using Google Cloud Vision AI.
+    """
+    client = get_vision_client()
+    
+    file_bytes = uploaded_file.getvalue()
+    
     try:
-        file_bytes = uploaded_file.getvalue()
-        full_text = ""
-        custom_config = r'--oem 3 --psm 4'
-        if uploaded_file.type == "application/pdf":
-            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
-                for page in doc:
-                    pix = page.get_pixmap(dpi=300)
-                    processed_bytes = preprocess_image_for_ocr(pix.tobytes("png"))
-                    full_text += pytesseract.image_to_string(Image.open(io.BytesIO(processed_bytes)), config=custom_config) + "\n"
-            return full_text
-        elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
-            processed_bytes = preprocess_image_for_ocr(file_bytes)
-            return pytesseract.image_to_string(Image.open(io.BytesIO(processed_bytes)), config=custom_config)
-        return "Unsupported file type."
-    except Exception as e:
-        return f"Error during OCR processing: {str(e)}"
+        # For both images and PDFs, Vision API can handle the bytes directly
+        image = vision.Image(content=file_bytes)
+        
+        # Use DOCUMENT_TEXT_DETECTION for dense text and better layout understanding
+        response = client.document_text_detection(image=image)
+        
+        if response.error.message:
+            raise Exception(f"{response.error.message}")
 
+        return response.full_text_annotation.text
+
+    except Exception as e:
+        return f"Error calling Google Vision API: {str(e)}"
+
+# --- PARSING LOGIC (This is the same robust mathematical parser from before) ---
 def parse_ocr_text(text: str):
-    """Parses OCR text using mathematical deduction and a stateful line-item parser."""
+    """Parses the high-quality OCR text from Google Vision."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Stage 1: Basic Field Extraction ---
+    # Vendor and Date Extraction
     if lines:
         for line in lines[:5]:
-            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier", "transaction"]):
                 parsed_data["vendor"] = line
                 break
     
@@ -72,25 +61,14 @@ def parse_ocr_text(text: str):
     date_match = re.search(date_pattern, text)
     if date_match:
         parsed_data["date"] = date_match.group(1).strip()
-    
-    # --- Stage 2: "Numbers First" Parsing for Financial Data ---
+
+    # Mathematical Parsing for Financials
     all_amounts = sorted(list(set([float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)])), reverse=True)
     
     if len(all_amounts) >= 2:
         grand_total = all_amounts[0]
         parsed_data["total_amount"] = grand_total
-        
-        subtotal = 0.0
-        subtotal_keywords = ["sous-total", "subtotal"]
-        for line in lines:
-            if any(kw in line.lower() for kw in subtotal_keywords):
-                line_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
-                if line_amounts:
-                    subtotal = max(line_amounts)
-                    break
-        
-        if subtotal == 0.0 and len(all_amounts) > 1:
-            subtotal = all_amounts[1]
+        subtotal = all_amounts[1]
         
         expected_tax_sum = round(grand_total - subtotal, 2)
         if expected_tax_sum > 0:
@@ -99,65 +77,34 @@ def parse_ocr_text(text: str):
             for i in range(1, 4):
                 for combo in combinations(tax_candidates, i):
                     if abs(sum(combo) - expected_tax_sum) < 0.02:
-                        validated_taxes = sorted(list(combo))
-                        break
-                if validated_taxes:
-                    break
+                        validated_taxes = sorted(list(combo)); break
+                if validated_taxes: break
             
             if validated_taxes:
                 if len(validated_taxes) == 1:
                     parsed_data["hst_amount"] = validated_taxes[0]
                 elif len(validated_taxes) >= 2:
-                    # Assign smaller to GST, larger to PST
                     parsed_data["gst_amount"] = validated_taxes[0]
                     parsed_data["pst_amount"] = validated_taxes[1]
 
-    # --- Stage 3: Stateful Line Item Extraction ---
-    line_items = []
-    current_description_lines = []
-    # Keywords that indicate the end of the items section
-    stop_keywords = ["ecofrais", "sous-total", "subtotal", "tax", "tps", "tvq", "gst", "pst", "hst"]
-    
-    money_pattern = re.compile(r'(\d+[.,]\d{2})$')
-
+    # Line Item Extraction
+    found_financials = [parsed_data['total_amount'], subtotal, *validated_taxes]
+    stop_keywords = ["sous-total", "subtotal", "ecofrais", "tax", "tps", "tvq", "gst", "pst", "hst", "total"]
     for line in lines:
-        # Stop processing if we hit the summary section
-        if any(keyword in line.lower() for keyword in stop_keywords):
-            # Before stopping, check if there's a pending description block
-            if current_description_lines:
-                # This handles cases where a price is on the same line as a stop keyword
-                if match := money_pattern.search(line):
-                    price = float(match.group(1).replace(',', '.'))
-                    full_description = " ".join(current_description_lines)
-                    line_items.append({"description": full_description, "price": price})
-            break
-
-        # Check if the line seems to end with a price
-        match = money_pattern.search(line)
-        
-        if match:
-            price = float(match.group(1).replace(',', '.'))
-            description_part = line[:match.start()].strip()
-            
-            # If there was a description building up, this price belongs to it
-            if current_description_lines:
-                current_description_lines.append(description_part)
-                full_description = " ".join(filter(None, current_description_lines))
-                line_items.append({"description": full_description, "price": price})
-                current_description_lines = [] # Reset
-            # If no prior description, this is a single-line item
-            elif description_part:
-                line_items.append({"description": description_part, "price": price})
-        else:
-            # If no price, it's part of a description
-            if len(line.strip()) > 1:
-                current_description_lines.append(line.strip())
-
-    parsed_data["line_items"] = line_items
+        if any(keyword in line.lower() for keyword in stop_keywords): continue
+        line_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', line)]
+        if len(line_amounts) == 1:
+            price = line_amounts[0]
+            is_financial = any(abs(price - fin_val) < 0.02 for fin_val in found_financials)
+            if not is_financial:
+                description = line.replace(str(price), '').replace('$', '').strip()
+                if len(description) > 3:
+                    parsed_data["line_items"].append({"description": description, "price": price})
+                    
     return parsed_data
 
 def extract_and_parse_file(uploaded_file):
-    """Main pipeline function."""
+    """Main pipeline function using Google Vision."""
     try:
         raw_text = extract_text_from_file(uploaded_file)
         if "Error" in raw_text or "Unsupported" in raw_text:
