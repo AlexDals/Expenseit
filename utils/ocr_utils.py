@@ -8,10 +8,9 @@ import numpy as np
 from google.cloud import vision
 import streamlit as st
 
-# --- GOOGLE VISION API SETUP AND PREPROCESSING ---
+# --- GOOGLE VISION API AND IMAGE PREPROCESSING (No changes) ---
 @st.cache_resource
 def get_vision_client():
-    """Initializes and returns a Google Vision API client."""
     try:
         credentials_dict = dict(st.secrets.google_credentials)
         client = vision.ImageAnnotatorClient.from_service_account_info(credentials_dict)
@@ -19,28 +18,6 @@ def get_vision_client():
     except Exception as e:
         st.error(f"Could not initialize Google Vision API client: {e}. Please check your Streamlit secrets.")
         st.stop()
-
-def preprocess_image_for_ocr(image_bytes):
-    """Advanced preprocessing with resizing and thresholding."""
-    try:
-        img_array = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        scale_percent = 200
-        width = int(img.shape[1] * scale_percent / 100)
-        height = int(img.shape[0] * scale_percent / 100)
-        dim = (width, height)
-        resized = cv2.resize(gray, dim, interpolation = cv2.INTER_CUBIC)
-        _, final_img = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        _, processed_img_bytes = cv2.imencode('.png', final_img)
-        return processed_img_bytes.tobytes()
-    except Exception:
-        img_array = np.frombuffer(image_bytes, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        thresh = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
-        _, processed_img_bytes = cv2.imencode('.png', thresh)
-        return processed_img_bytes.tobytes()
 
 def extract_text_from_file(uploaded_file):
     """Extracts text from file using OCR."""
@@ -52,15 +29,13 @@ def extract_text_from_file(uploaded_file):
             with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                 for page in doc:
                     pix = page.get_pixmap(dpi=300)
-                    processed_bytes = preprocess_image_for_ocr(pix.tobytes("png"))
-                    image = vision.Image(content=processed_bytes)
+                    image = vision.Image(content=pix.tobytes("png"))
                     response = client.document_text_detection(image=image)
                     if response.error.message: raise Exception(response.error.message)
                     full_text += response.full_text_annotation.text + "\n"
             return full_text
         elif uploaded_file.type in ["image/png", "image/jpeg", "image/jpg"]:
-            processed_bytes = preprocess_image_for_ocr(file_bytes)
-            image = vision.Image(content=processed_bytes)
+            image = vision.Image(content=file_bytes)
             response = client.document_text_detection(image=image)
             if response.error.message: raise Exception(response.error.message)
             return response.full_text_annotation.text
@@ -68,86 +43,85 @@ def extract_text_from_file(uploaded_file):
     except Exception as e:
         return f"Error calling Google Vision API: {str(e)}"
 
-# --- DEFINITIVE PARSING LOGIC: BLOCK-AWARE ---
+# --- DEFINITIVE PARSING LOGIC: HYBRID APPROACH ---
 def parse_ocr_text(text: str):
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Regex Definitions ---
-    price_pattern = re.compile(r'(\d+[.,]\d{2})$')
-    date_pattern = re.compile(r'(\d{2,4}[-/\s]\d{1,2}[-/\s]\d{1,2})')
+    # --- Keyword Definitions ---
+    total_keywords = ["total"]
+    subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
+    gst_keywords = ["tps", "gst", "federal tax"]
+    pst_keywords = ["tvq", "qst", "tvp", "pst", "provincial tax"]
+    hst_keywords = ["hst", "tvh"]
     
-    # --- Data Extraction Pass ---
-    current_description_lines = []
-    stop_keywords = ["sous-total", "subtotal"]
+    # --- Line-by-Line Classification using Right-to-Left Parsing ---
+    # This list will hold tuples of (line_index, description, price)
+    potential_items = []
+    
+    line_pattern = re.compile(r'^(.*?)\s*([$]?\d+[.,]\d{2})[$]?\s*$')
 
     for i, line in enumerate(lines):
-        line_lower = line.lower()
+        match = line_pattern.match(line)
+        if not match:
+            continue
+
+        description = match.group(1).strip()
+        price = float(match.group(2).replace('$', '').replace(',', '.'))
+        desc_lower = description.lower()
+
+        # Use negative lookbehind to find "total" but not "subtotal"
+        if re.search(r'(?<!sous-)(?<!sub)total', desc_lower):
+            parsed_data['total_amount'] = max(parsed_data['total_amount'], price) # Take largest total
+        elif any(kw in desc_lower for kw in gst_keywords):
+            parsed_data['gst_amount'] = price
+        elif any(kw in desc_lower for kw in pst_keywords):
+            parsed_data['pst_amount'] = price
+        elif any(kw in desc_lower for kw in hst_keywords):
+            parsed_data['hst_amount'] = price
+        elif any(kw in desc_lower for kw in subtotal_keywords):
+            pass  # It's a subtotal, ignore for now
+        else:
+            # If no financial keywords match, it's a potential line item
+            potential_items.append({'index': i, 'description': description, 'price': price})
+
+    # --- "Look-Back" Logic to build multi-line item descriptions ---
+    final_line_items = []
+    for i, item in enumerate(potential_items):
+        full_description = [item['description']]
+        # Look at the lines immediately preceding the current item's line
+        previous_line_index = item['index'] - 1
         
-        # Stop processing for line items when we hit the subtotal section
-        if any(keyword in line_lower for keyword in stop_keywords):
-            break
-
-        # Check if the line is JUST a price, which belongs to the previous description block
-        if match := price_pattern.match(line.replace('$', '').strip()):
-            if current_description_lines:
-                price = float(match.group(1).replace(',', '.'))
-                full_description = " ".join(current_description_lines)
-                parsed_data["line_items"].append({"description": full_description, "price": price})
-                current_description_lines = [] # Reset after creating an item
-            continue
-
-        # Check if the line contains text AND a price (single-line item)
-        match = re.match(r'^(.*?)\s+([\d.,]+\d{2})$', line)
-        if match:
-            description, price_str = match.groups()
-            price = float(price_str.replace(',', '.'))
+        # While the previous line exists and doesn't contain a price, it's part of the description
+        while previous_line_index >= 0 and not line_pattern.match(lines[previous_line_index]):
+            # Stop if we hit the description of a previously processed item
+            if any(item_to_check['index'] == previous_line_index for item_to_check in potential_items):
+                break
             
-            # If there was a description building up, finalize it first
-            if current_description_lines:
-                full_description = " ".join(current_description_lines)
-                # Heuristic: if the price of the previous block is missing, this price might belong to it
-                # This part is complex, for now we assume price ends the block.
-                # A simpler logic is to just add the pending block as an item without a price.
-                # For now, we will associate this price with this line's description.
-                
-            # Add the current line as a new item
-            parsed_data["line_items"].append({"description": description.strip(), "price": price})
-            current_description_lines = [] # Reset
-            continue
-            
-        # If no price found, it's part of a description block
-        if len(line) > 1:
-            current_description_lines.append(line)
+            description_part = lines[previous_line_index].strip()
+            if len(description_part) > 1:
+                full_description.insert(0, description_part)
+            previous_line_index -= 1
+        
+        # Join the collected description lines
+        final_description = " ".join(filter(None, full_description))
+        
+        # Filter out likely noise or accidental matches
+        if len(final_description) > 2 and "merci" not in final_description.lower():
+            final_line_items.append({'description': final_description, 'price': item['price']})
 
-    # --- Post-process the entire text for summary financials ---
-    for line in lines:
-        line_lower = line.lower()
-        if 'total' in line_lower and 'sous-total' not in line_lower and 'subtotal' not in line_lower:
-            if amounts := re.findall(r'(\d+[.,]\d{2})', line):
-                parsed_data['total_amount'] = max([float(a.replace(',', '.')) for a in amounts])
-        elif any(kw in line_lower for kw in ['tps', 'gst']):
-            if amounts := re.findall(r'(\d+[.,]\d{2})', line):
-                parsed_data['gst_amount'] = float(amounts[0].replace(',', '.'))
-        elif any(kw in line_lower for kw in ['tvq', 'qst', 'pst']):
-            if amounts := re.findall(r'(\d+[.,]\d{2})', line):
-                parsed_data['pst_amount'] = float(amounts[0].replace(',', '.'))
+    parsed_data['line_items'] = final_line_items
 
-    # --- Vendor and Date Extraction ---
+    # --- Vendor and Date Post-Processing ---
     if lines:
         for line in lines[:5]:
-            if len(line) > 2 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier"]):
+            if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier", "transaction"]):
                 parsed_data["vendor"] = line
                 break
     
+    date_pattern = r'(\d{4}[-/\s]\d{1,2}[-/\s]\d{1,2})'
     if date_match := re.search(date_pattern, text):
         parsed_data["date"] = date_match.group(1).strip()
-    
-    # Final check: If total is still zero, use the largest number
-    if parsed_data["total_amount"] == 0.0:
-        all_amounts = [float(m.replace(',', '.')) for m in re.findall(r'(\d+[.,]\d{2})', text)]
-        if all_amounts:
-            parsed_data["total_amount"] = max(all_amounts)
 
     return parsed_data
 
@@ -157,8 +131,10 @@ def extract_and_parse_file(uploaded_file):
         raw_text = extract_text_from_file(uploaded_file)
         if "Error" in raw_text:
              return raw_text, {"error": raw_text}
+        
         parsed_data = parse_ocr_text(raw_text)
         return raw_text, parsed_data
+        
     except Exception as e:
         error_message = f"A critical error occurred: {str(e)}"
         return error_message, {"error": error_message}
