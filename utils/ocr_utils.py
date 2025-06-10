@@ -1,15 +1,12 @@
-import pytesseract
-from PIL import Image
-import io
-import re
-import fitz  # PyMuPDF
-import cv2  # OpenCV
-import numpy as np
-from google.cloud import vision
 import streamlit as st
+from google.cloud import vision
+import re
 from itertools import combinations
+import fitz  # PyMuPDF
+import io
+from PIL import Image
 
-# --- GOOGLE VISION API AND IMAGE PREPROCESSING ---
+# --- GOOGLE VISION API SETUP ---
 @st.cache_resource
 def get_vision_client():
     """Initializes and returns a Google Vision API client."""
@@ -21,34 +18,62 @@ def get_vision_client():
         st.error(f"Could not initialize Google Vision API client: {e}. Please check your Streamlit secrets.")
         st.stop()
 
+# --- DEFINITIVE FILE EXTRACTION LOGIC ---
 def extract_text_from_file(uploaded_file):
-    """Extracts text from a file using Google Cloud Vision AI."""
+    """
+    Extracts text from an image or PDF file using Google Cloud Vision AI.
+    If the file is a PDF, it converts each page to an image before sending.
+    """
     client = get_vision_client()
     file_bytes = uploaded_file.getvalue()
+    mime_type = uploaded_file.type
+    
     try:
-        image = vision.Image(content=file_bytes)
-        response = client.document_text_detection(image=image)
-        if response.error.message:
-            raise Exception(f"{response.error.message}")
-        return response.full_text_annotation.text
-    except Exception as e:
-        return f"Error calling Google Vision API: {str(e)}"
+        # If it's a PDF, process page by page
+        if mime_type == "application/pdf":
+            full_text = ""
+            with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                for page_num, page in enumerate(doc):
+                    # Render page to a high-quality PNG image in memory
+                    pix = page.get_pixmap(dpi=300)
+                    img_bytes = pix.tobytes("png")
+                    
+                    image = vision.Image(content=img_bytes)
+                    response = client.document_text_detection(image=image)
+                    if response.error.message:
+                        raise Exception(f"Google Vision API error on page {page_num+1}: {response.error.message}")
+                    
+                    full_text += response.full_text_annotation.text + "\n"
+            return full_text
+        
+        # If it's an image, send it directly
+        elif mime_type in ["image/png", "image/jpeg", "image/jpg"]:
+            image = vision.Image(content=file_bytes)
+            response = client.document_text_detection(image=image)
+            if response.error.message:
+                raise Exception(response.error.message)
+            return response.full_text_annotation.text
+        
+        else:
+            return "Unsupported file type. Please upload a JPG, PNG, or PDF."
 
-# --- DEFINITIVE PARSING LOGIC ---
+    except Exception as e:
+        return f"Error calling Google Vision API: {str(e)}. Please ensure the uploaded file is not corrupted."
+
+# --- PARSING LOGIC (This is our stable 'Right-to-Left' parser) ---
 def parse_ocr_text(text: str):
     """Parses OCR text using targeted, line-by-line regular expressions."""
     parsed_data = {"vendor": "N/A", "date": "N/A", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     lines = [line.strip() for line in text.split('\n') if line.strip()]
 
-    # --- Keyword Definitions ---
+    # Keyword Definitions
     total_keywords = ["total"]
     subtotal_keywords = ["sous-total", "subtotal", "total partiel"]
     gst_keywords = ["tps", "gst", "federal tax", "taxe fédérale"]
     pst_keywords = ["tvq", "qst", "tvp", "pst", "provincial tax", "taxe provinciale"]
     hst_keywords = ["hst", "tvh"]
     
-    # --- Line-by-Line Classification ---
-    # --- FIX: This regex is now more flexible. It captures the description, the number, and allows for trailing characters. ---
+    # Line-by-Line Classification
     line_pattern = re.compile(r'^(.*?)\s*[$]?(\d+[.,]\d{2})[$]?\s*$', re.IGNORECASE)
 
     for line in lines:
@@ -58,7 +83,6 @@ def parse_ocr_text(text: str):
             price = float(price_str)
             desc_lower = description.lower()
 
-            # Using a negative lookbehind `(?<!...)` to find "total" but not "subtotal"
             if re.search(r'(?<!sous-)(?<!sub)total', desc_lower):
                 parsed_data['total_amount'] = price
             elif any(kw in desc_lower for kw in gst_keywords):
@@ -68,14 +92,12 @@ def parse_ocr_text(text: str):
             elif any(kw in desc_lower for kw in hst_keywords):
                 parsed_data['hst_amount'] = price
             elif any(kw in desc_lower for kw in subtotal_keywords):
-                # We note the subtotal but don't add it as a line item
                 pass
             else:
-                # If no financial keywords match, it's a line item
                 if len(description) > 1 and "merci" not in desc_lower and "approved" not in desc_lower:
                     parsed_data["line_items"].append({'description': description, 'price': price})
 
-    # --- Vendor and Date Post-Processing ---
+    # Vendor and Date Post-Processing
     if lines:
         for line in lines[:5]:
             if len(line) > 3 and line.upper() == line and not any(kw in line.lower() for kw in ["invoice", "facture", "date", "caissier", "transaction"]):
@@ -88,6 +110,7 @@ def parse_ocr_text(text: str):
 
     return parsed_data
 
+# --- Main Entry Point Function ---
 def extract_and_parse_file(uploaded_file):
     """Main pipeline function using Google Vision."""
     try:
