@@ -22,83 +22,90 @@ if not user_id:
 
 # --- Data Fetching Based on Role ---
 reports_df = pd.DataFrame()
+page_subheader = ""
+
 if user_role == 'user':
-    st.subheader("Your Submitted Reports")
+    page_subheader = "Your Submitted Reports"
     reports_df = su.get_reports_for_user(user_id)
 elif user_role == 'approver':
-    st.subheader("Reports Awaiting Your Approval")
+    page_subheader = "Reports Awaiting Your Approval"
     reports_df = su.get_reports_for_approver(user_id)
 elif user_role == 'admin':
-    st.subheader("All Company Reports")
+    page_subheader = "All Company Reports"
     reports_df = su.get_all_reports()
 
+st.subheader(page_subheader)
+
+# --- Display Reports and Details ---
 if reports_df.empty:
     st.info("No reports found for your view.")
 else:
-    # --- Report Selection ---
+    # Add a user-friendly display name to the DataFrame for the selectbox
     if 'user' in reports_df.columns:
         reports_df['submitter_name'] = reports_df['user'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'N/A')
         reports_df['display_name'] = reports_df['report_name'] + " by " + reports_df['submitter_name'] + " (Status: " + reports_df['status'] + ")"
     else:
         reports_df['display_name'] = reports_df['report_name'] + " (Status: " + reports_df['status'] + ")"
-    
+
     report_options = {row['display_name']: row['id'] for index, row in reports_df.iterrows()}
     report_options_list = ["-- Select a report --"] + list(report_options.keys())
+    
     selected_report_display_name = st.selectbox("Select a report to view its details:", options=report_options_list)
 
     if selected_report_display_name != "-- Select a report --":
         selected_report_id = report_options[selected_report_display_name]
+        clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', selected_report_display_name.split(' (')[0]).replace(' ', '_')
+        
         st.markdown("---")
         st.header(f"Details for: {selected_report_display_name.split(' (')[0]}")
         
         selected_report_details = reports_df[reports_df['id'] == selected_report_id].iloc[0]
         original_expenses_df = su.get_expenses_for_report(selected_report_id)
 
-        # --- Approval Section (for Admins/Approvers) ---
+        # --- Approval & Editing Section (for Admins/Approvers) ---
         if user_role in ['admin', 'approver']:
             st.write(f"**Current Status:** `{selected_report_details['status']}`")
+            
             if selected_report_details['status'] == 'Submitted':
                 st.write("Actions:")
                 bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
-                if bcol1.button("Approve", type="primary", use_container_width=True):
-                    if su.update_report_status(selected_report_id, "Approved"): st.success("Report Approved!"); st.rerun()
-                if bcol2.button("Deny", use_container_width=True):
-                    if su.update_report_status(selected_report_id, "Denied"): st.warning("Report Denied."); st.rerun()
+                with bcol1:
+                    if st.button("Approve", type="primary", use_container_width=True):
+                        if su.update_report_status(selected_report_id, "Approved"):
+                            st.success("Report Approved!")
+                            st.rerun()
+                with bcol2:
+                    if st.button("Deny", use_container_width=True):
+                        if su.update_report_status(selected_report_id, "Denied"):
+                            st.warning("Report Denied.")
+                            st.rerun()
             st.markdown("---")
-        
-        if not original_expenses_df.empty:
-            # --- Editing and Static View Section ---
-            if user_role in ['admin', 'approver']:
+            
+            # --- Editing Section ---
+            if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
                 st.info("You can edit the values directly in the table below. Click the 'Save Expense Changes' button when you are done.")
                 
-                # --- NEW: Prepare DataFrame for Data Editor ---
+                # Prepare DataFrame for Data Editor
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
                 category_names = [""] + [cat['name'] for cat in categories]
                 category_map = {cat['name']: cat['id'] for cat in categories}
                 
-                # 1. Convert date column to datetime objects
                 expenses_to_edit['expense_date'] = pd.to_datetime(expenses_to_edit['expense_date'], errors='coerce')
-                
-                # 2. Fill missing numeric values with 0
                 for col in ['amount', 'gst_amount', 'pst_amount', 'hst_amount']:
                     if col in expenses_to_edit.columns:
                         expenses_to_edit[col] = pd.to_numeric(expenses_to_edit[col], errors='coerce').fillna(0)
-
-                # 3. Ensure category column has a valid default for the selectbox
                 if 'category_name' in expenses_to_edit.columns:
                     expenses_to_edit['category_name'] = expenses_to_edit['category_name'].fillna("").astype(str)
-                    # Ensure every category in the dataframe is a valid option
                     valid_category_options = set(category_names)
                     expenses_to_edit['category_name'] = expenses_to_edit['category_name'].apply(lambda x: x if x in valid_category_options else "")
-                # --- END OF PREPARATION ---
 
                 edited_expenses_df = st.data_editor(
                     expenses_to_edit,
                     column_config={
-                        "id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, 
-                        "line_items": None, "created_at": None, "category_id": None,
+                        "id": None, "report_id": None, "user_id": None, "receipt_path": None, 
+                        "ocr_text": None, "line_items": None, "created_at": None, "category_id": None,
                         "expense_date": st.column_config.DateColumn("Date", required=True),
                         "vendor": "Vendor", "description": "Purpose",
                         "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True),
@@ -112,31 +119,82 @@ else:
                 
                 if st.button("Save Expense Changes"):
                     with st.spinner("Saving..."):
-                        changes_df = pd.concat([original_expenses_df, edited_expenses_df]).drop_duplicates(keep=False)
+                        # For simplicity, we iterate through all rows and update if they have an ID
                         all_success = True
-                        for index, row in changes_df.iterrows():
-                            expense_id = row['id']
-                            updates = row.to_dict()
-                            # Convert category name back to ID for saving
-                            updates['category_id'] = category_map.get(row.get('category_name'))
-                            # Remove non-db columns
-                            updates.pop('category_name', None); updates.pop('user', None)
-                            
-                            if not su.update_expense_item(expense_id, updates):
-                                all_success = False
-                    if all_success: st.success("Changes saved!"); st.rerun()
-                    else: st.error("Failed to save one or more changes.")
-
-            # Static View for Regular Users
-            else:
-                for index, row in original_expenses_df.iterrows():
-                    # ... (The existing static display logic from the last version) ...
-                    st.markdown(f"#### Expense: {row.get('vendor', 'N/A')} - ${row.get('amount', 0):.2f}")
-                    # ... etc
+                        for index, row in edited_expenses_df.iterrows():
+                            expense_id = row.get('id')
+                            if pd.notna(expense_id):
+                                updates = {
+                                    "expense_date": str(row['expense_date'].date()),
+                                    "vendor": row['vendor'],
+                                    "description": row['description'],
+                                    "amount": row['amount'],
+                                    "gst_amount": row.get('gst_amount'),
+                                    "pst_amount": row.get('pst_amount'),
+                                    "hst_amount": row.get('hst_amount'),
+                                    "category_id": category_map.get(row.get('category_name'))
+                                }
+                                if not su.update_expense_item(expense_id, updates):
+                                    all_success = False
+                        if all_success:
+                            st.success("Changes saved successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save one or more changes.")
+        
+        # --- Static View for Regular Users ---
         else:
-            st.info("No expense items found for this report.")
+            if not original_expenses_df.empty:
+                for index, row in original_expenses_df.iterrows():
+                    st.markdown(f"#### Expense: {row.get('vendor', 'N/A')} - ${row.get('amount', 0):.2f}")
+                    exp_col1, exp_col2 = st.columns(2)
+                    with exp_col1:
+                        st.write(f"**Date:** {row.get('expense_date', 'N/A')}")
+                        st.write(f"**Category:** `{row.get('category_name', 'N/A')}`")
+                        st.write(f"**Purpose:** {row.get('description', 'N/A')}")
+                    with exp_col2:
+                        st.write(f"**GST/TPS:** ${row.get('gst_amount', 0) or 0:.2f}")
+                        st.write(f"**PST/QST:** ${row.get('pst_amount', 0) or 0:.2f}")
+                        st.write(f"**HST/TVH:** ${row.get('hst_amount', 0) or 0:.2f}")
+                    with st.expander("View Details (Line Items & Receipt)"):
+                        line_items = []
+                        if row.get('line_items') and isinstance(row['line_items'], str):
+                            try: line_items = json.loads(row['line_items'])
+                            except (json.JSONDecodeError, TypeError): line_items = []
+                        if line_items:
+                            st.write("**Line Items**")
+                            st.dataframe(pd.DataFrame(line_items))
+                        else: st.write("*No line items were extracted for this expense.*")
+                        if row.get('receipt_path'):
+                            st.write("**Receipt File**")
+                            receipt_url = su.get_receipt_public_url(row['receipt_path'])
+                            if receipt_url:
+                                if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')):
+                                    st.image(receipt_url)
+                                else: st.link_button("Download Receipt File", receipt_url)
+                        else: st.write("*No receipt was uploaded for this expense.*")
+                    st.markdown("---")
 
         # --- Export Buttons Section ---
-        st.markdown("---")
-        st.subheader("Export This Full Report")
-        # ... (The existing export logic remains unchanged) ...
+        if not original_expenses_df.empty:
+            st.subheader("Export This Full Report")
+            
+            desired_export_columns = ["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount", "category_name"]
+            available_columns_for_export = [col for col in desired_export_columns if col in original_expenses_df.columns]
+            
+            if available_columns_for_export:
+                export_df = original_expenses_df[available_columns_for_export].copy()
+                btn_col1, btn_col2 = st.columns(2)
+                with btn_col1:
+                    csv_data = export_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
+                with btn_col2:
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        export_df.to_excel(writer, index=False, sheet_name='Expenses')
+                    excel_data = output.getvalue()
+                    st.download_button(label="📄 Download as Excel", data=excel_data, file_name=f"{clean_report_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+            else:
+                st.warning("No data with exportable columns found for this report.")
+        else:
+            st.info("No expense items found for this report.")
