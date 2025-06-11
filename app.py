@@ -35,16 +35,19 @@ if st.session_state.get("authentication_status"):
             st.session_state["role"] = su.get_user_role(username)
 
 # --- PROGRAMMATIC NAVIGATION ---
-# Define all possible pages in your app using the correct, numbered filenames.
-login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=True)
-dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠")
+# A helper variable to make the logic cleaner
+is_logged_in = st.session_state.get("authentication_status")
+
+# Define all pages, with a DYNAMIC default page based on login status
+login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
+dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
 view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 admin_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 
 # Build the navigation list based on login status and role.
-if st.session_state.get("authentication_status"):
+if is_logged_in:
     # If the user is logged in, show the main app pages.
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if st.session_state.get("role") == 'admin':
