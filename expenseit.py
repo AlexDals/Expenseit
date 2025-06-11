@@ -3,16 +3,12 @@ import streamlit_authenticator as stauth
 from utils import supabase_utils as su
 
 # --- PAGE CONFIGURATION ---
-# This must be the first Streamlit command.
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
 
 # --- USER AUTHENTICATION ---
-# We fetch the user credentials from the Supabase backend.
 try:
     user_credentials = su.fetch_all_users_for_auth()
-
-    # We get cookie settings from your Streamlit secrets file.
     cookie_config = st.secrets.get("cookie", {})
     if not cookie_config.get('name') or not cookie_config.get('key'):
         st.error("Cookie configuration is missing from secrets. Please set `name` and `key` under a [cookie] section.")
@@ -30,23 +26,27 @@ except Exception as e:
 
 
 # --- LOGIN WIDGET AND LOGIC ---
-# This renders the login form and handles the authentication status.
 authenticator.login()
 
 
 if st.session_state.get("authentication_status") is False:
     st.error("Username/password is incorrect")
-    # Provide a link/button to the registration page for new users
     if st.button("Register a new account"):
         st.switch_page("pages/3_🔑_Register.py")
 
 elif st.session_state.get("authentication_status") is None:
     st.warning("Please enter your username and password.")
-    # Provide a link/button to the registration page for new users
     if st.button("Register a new account"):
         st.switch_page("pages/3_🔑_Register.py")
 
 elif st.session_state.get("authentication_status"):
+
+    # --- TEMPORARY DEBUGGING CODE ---
+    st.warning("Debug Information (This block can be removed after we solve the issue):")
+    st.write("Full session state data:")
+    st.json(st.session_state)
+    # --- END OF DEBUGGING CODE ---
+    
     # --- MAIN APP FOR LOGGED-IN USER ---
     name = st.session_state.get("name")
     username = st.session_state.get("username")
@@ -58,7 +58,6 @@ elif st.session_state.get("authentication_status"):
     st.write("Navigate using the sidebar to create a new report or view existing reports.")
     st.markdown("---")
 
-    # Display a quick dashboard for the user
     st.subheader("Your Dashboard")
     try:
         user_id = su.get_user_id_by_username(username)
