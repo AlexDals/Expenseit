@@ -8,7 +8,9 @@ st.set_page_config(layout="wide", page_title="Expense Reporting")
 
 # --- USER AUTHENTICATION ---
 try:
+    # This dictionary now holds all user data, including roles
     user_credentials = su.fetch_all_users_for_auth()
+    
     cookie_config = st.secrets.get("cookie", {})
     if not cookie_config.get('name') or not cookie_config.get('key'):
         st.error("Cookie configuration is missing from secrets. Please set `name` and `key` under a [cookie] section.")
@@ -40,16 +42,19 @@ elif st.session_state.get("authentication_status") is None:
         st.switch_page("pages/3_🔑_Register.py")
 
 elif st.session_state.get("authentication_status"):
-
-    # --- TEMPORARY DEBUGGING CODE ---
-    st.warning("Debug Information (This block can be removed after we solve the issue):")
-    st.write("Full session state data:")
-    st.json(st.session_state)
-    # --- END OF DEBUGGING CODE ---
     
+    # --- DEFINITIVE FIX FOR ROLE ---
+    # Manually set the user's role in the session state after successful login.
+    username = st.session_state.get("username")
+    if username:
+        # Look up the user's details in the dictionary we already fetched
+        user_details = user_credentials.get("usernames", {}).get(username, {})
+        # Set the role from the credentials into the session state
+        st.session_state["role"] = user_details.get("role")
+    # --- END OF FIX ---
+
     # --- MAIN APP FOR LOGGED-IN USER ---
     name = st.session_state.get("name")
-    username = st.session_state.get("username")
     
     st.sidebar.title(f"Welcome {name}!")
     authenticator.logout("Logout", "sidebar")
