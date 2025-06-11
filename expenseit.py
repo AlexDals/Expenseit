@@ -6,12 +6,6 @@ st.set_page_config(layout="wide", page_title="Expense Reporting")
 
 try:
     user_credentials = su.fetch_all_users_for_auth()
-    
-    # --- TEMPORARY DEBUGGING CODE (PART 1) ---
-    st.info("DEBUG: Raw data fetched from Supabase (user_credentials):")
-    st.json(user_credentials)
-    # --- END OF DEBUGGING CODE ---
-
     cookie_config = st.secrets.get("cookie", {})
     if not cookie_config.get('name') or not cookie_config.get('key'):
         st.error("Cookie configuration is missing.")
@@ -40,17 +34,19 @@ elif st.session_state.get("authentication_status") is None:
         st.switch_page("pages/3_🔑_Register.py")
 
 elif st.session_state.get("authentication_status"):
-    username = st.session_state.get("username")
-    if username:
-        user_details = user_credentials.get("usernames", {}).get(username, {})
-        st.session_state["role"] = user_details.get("role")
     
-    # --- TEMPORARY DEBUGGING CODE (PART 2) ---
-    st.warning("DEBUG: Session state after login:")
-    st.json(st.session_state)
-    # --- END OF DEBUGGING CODE ---
-    
+    # --- DEFINITIVE FIX FOR ROLE ---
+    # After a successful login, we perform a fresh, targeted database
+    # lookup to get the role for the logged-in user.
+    if 'role' not in st.session_state or st.session_state.role is None:
+        username = st.session_state.get("username")
+        if username:
+            st.session_state["role"] = su.get_user_role(username)
+    # --- END OF FIX ---
+
+    # --- MAIN APP FOR LOGGED-IN USER ---
     name = st.session_state.get("name")
+    
     st.sidebar.title(f"Welcome {name}!")
     authenticator.logout("Logout", "sidebar")
 
@@ -60,6 +56,7 @@ elif st.session_state.get("authentication_status"):
 
     st.subheader("Your Dashboard")
     try:
+        username = st.session_state.get("username")
         user_id = su.get_user_id_by_username(username)
         if user_id:
             user_reports_df = su.get_reports_for_user(user_id)
