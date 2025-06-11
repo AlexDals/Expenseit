@@ -2,10 +2,14 @@ import streamlit as st
 import streamlit_authenticator as stauth
 from utils import supabase_utils as su
 
+# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
+
+# --- USER AUTHENTICATION ---
 try:
     user_credentials = su.fetch_all_users_for_auth()
+    
     cookie_config = st.secrets.get("cookie", {})
     if not cookie_config.get('name') or not cookie_config.get('key'):
         st.error("Cookie configuration is missing.")
@@ -21,7 +25,10 @@ except Exception as e:
     st.error(f"An error occurred during authentication setup: {e}")
     st.stop()
 
+
+# --- LOGIN WIDGET AND LOGIC ---
 authenticator.login()
+
 
 if st.session_state.get("authentication_status") is False:
     st.error("Username/password is incorrect")
@@ -35,14 +42,34 @@ elif st.session_state.get("authentication_status") is None:
 
 elif st.session_state.get("authentication_status"):
     
-    # --- DEFINITIVE FIX FOR ROLE ---
-    # After a successful login, we perform a fresh, targeted database
-    # lookup to get the role for the logged-in user.
+    # --- ROLE-BASED SIDEBAR HIDING ---
+    # This CSS hides the "Register" page link from the sidebar since the user is already logged in.
+    # It targets the 3rd list item in the navigation because of the file name "3_..._Register.py"
+    st.markdown("""
+        <style>
+            [data-testid="stSidebarNav"] ul li:nth-child(3) {
+                display: none;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # Hide the "User Management" page if the user is not an admin.
+    # It targets the 4th list item in the navigation.
+    if st.session_state.get("role") != 'admin':
+        st.markdown("""
+            <style>
+                [data-testid="stSidebarNav"] ul li:nth-child(4) {
+                    display: none;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+    # --- END OF HIDING LOGIC ---
+    
+    # Manually set the user's role in the session state after successful login.
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
         if username:
             st.session_state["role"] = su.get_user_role(username)
-    # --- END OF FIX ---
 
     # --- MAIN APP FOR LOGGED-IN USER ---
     name = st.session_state.get("name")
@@ -67,7 +94,7 @@ elif st.session_state.get("authentication_status"):
                 with col2:
                     st.metric("Total Expenses Claimed", f"${user_reports_df['total_amount'].sum():,.2f}")
             else:
-                st.info("No reports submitted yet.")
+                st.info("No reports submitted yet. Go to 'New Report' to create one!")
         else:
             st.error("Could not find your user profile.")
     except Exception as e:
