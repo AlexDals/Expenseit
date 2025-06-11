@@ -35,23 +35,28 @@ if st.session_state.get("authentication_status"):
             st.session_state["role"] = su.get_user_role(username)
 
 # --- PROGRAMMATIC NAVIGATION ---
-# A helper variable to make the logic cleaner
 is_logged_in = st.session_state.get("authentication_status")
 
-# Define all pages, with a DYNAMIC default page based on login status
+# Define all pages in your app
 login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
 view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
-admin_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
+user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
+# --- FIX: Define the new Category Management page ---
+category_management_page = st.Page("pages/7_📈_Category_Management.py", title="Category Management", icon="📈")
+
 
 # Build the navigation list based on login status and role.
 if is_logged_in:
     # If the user is logged in, show the main app pages.
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if st.session_state.get("role") == 'admin':
-        nav_pages.append(admin_page)
+        # Add admin-only pages
+        nav_pages.append(user_management_page)
+        # --- FIX: Add the new page to the admin view ---
+        nav_pages.append(category_management_page)
 else:
     # If the user is logged out, show only the account pages.
     nav_pages = [login_page, register_page]
