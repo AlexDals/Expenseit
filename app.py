@@ -3,11 +3,11 @@ from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
 # --- PAGE CONFIGURATION ---
+# This MUST be the first Streamlit command.
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
-# --- AUTHENTICATION AND SESSION STATE INITIALIZATION ---
+# --- USER AUTHENTICATION SETUP ---
 # Initialize or retrieve the authenticator from the session state.
-# This ensures it's created only once.
 if 'authenticator' not in st.session_state:
     try:
         user_credentials = su.fetch_all_users_for_auth()
@@ -15,8 +15,8 @@ if 'authenticator' not in st.session_state:
         
         authenticator = Authenticate(
             user_credentials,
-            cookie_config['name'],
-            cookie_config['key'],
+            cookie_config.get('name', 'some_cookie_name'), # Provide defaults
+            cookie_config.get('key', 'some_random_key'),
             cookie_config.get('expiry_days', 30),
         )
         st.session_state['authenticator'] = authenticator
@@ -30,10 +30,12 @@ else:
 # This block runs every time to ensure the role is in the session state if logged in.
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
-        st.session_state["role"] = su.get_user_role(st.session_state.get("username"))
+        username = st.session_state.get("username")
+        if username:
+            st.session_state["role"] = su.get_user_role(username)
 
 # --- PROGRAMMATIC NAVIGATION ---
-# Define all possible pages in your app.
+# Define all possible pages in your app using the correct, numbered filenames.
 login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=True)
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠")
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
@@ -43,12 +45,12 @@ admin_page = st.Page("pages/6_User_Management.py", title="User Management", icon
 
 # Build the navigation list based on login status and role.
 if st.session_state.get("authentication_status"):
-    # If the user is logged in
+    # If the user is logged in, show the main app pages.
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if st.session_state.get("role") == 'admin':
         nav_pages.append(admin_page)
 else:
-    # If the user is logged out
+    # If the user is logged out, show only the account pages.
     nav_pages = [login_page, register_page]
 
 # Create and run the navigation
