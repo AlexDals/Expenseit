@@ -2,10 +2,10 @@ import streamlit as st
 from utils import supabase_utils as su
 import pandas as pd
 import streamlit_authenticator as stauth
-import re
 import bcrypt
 
-st.set_page_config(layout="wide")
+# The redundant st.set_page_config() call has been removed.
+
 st.title("⚙️ User Management")
 
 # --- Authentication and Role Check ---
@@ -16,7 +16,7 @@ elif st.session_state.get("role") != 'admin':
     st.error("You do not have permission to access this page.")
     st.stop()
 
-# --- NEW: Admin User Creation Form ---
+# --- Admin User Creation Form ---
 with st.expander("Create a New User", expanded=False):
     with st.form("admin_create_user_form", clear_on_submit=True):
         st.subheader("New User Details")
@@ -39,7 +39,7 @@ with st.expander("Create a New User", expanded=False):
                     
                     if su.register_user(new_username, new_name, new_email, hashed_password, new_role):
                         st.success(f"User '{new_username}' created successfully with role '{new_role}'.")
-                    # The register_user function will show an st.error on failure
+                        st.rerun()
                 except Exception as e:
                     st.error(f"A critical error occurred during user creation: {e}")
 
