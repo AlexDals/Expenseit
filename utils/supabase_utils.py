@@ -15,7 +15,6 @@ def init_connection() -> Client:
         st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- USER & AUTH FUNCTIONS ---
 def fetch_all_users_for_auth():
     supabase = init_connection()
     try:
@@ -32,8 +31,8 @@ def fetch_all_users_for_auth():
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
     try:
-        user_exists = supabase.table('users').select('id').eq('username', username).execute().data
-        if user_exists:
+        user_exists = supabase.table('users').select('id', count='exact').eq('username', username).execute()
+        if user_exists.count > 0:
             st.error("Username already taken.")
             return False
         response = supabase.table('users').insert({"username": username, "name": name, "email": email, "hashed_password": hashed_password, "role": role}).execute()
@@ -60,34 +59,6 @@ def get_user_id_by_username(username):
         st.error(f"Error fetching user ID: {e}")
         return None
 
-def get_all_users():
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select("id, username, name, email, role, approver_id").execute()
-        return pd.DataFrame(response.data)
-    except Exception as e:
-        st.error(f"Error fetching all users: {e}")
-        return pd.DataFrame()
-
-def get_all_approvers():
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select("id, name").eq('role', 'approver').execute()
-        return response.data
-    except Exception as e:
-        st.error(f"Error fetching approvers: {e}")
-        return []
-
-def update_user_details(user_id, role, approver_id):
-    supabase = init_connection()
-    try:
-        supabase.table('users').update({"role": role, "approver_id": approver_id}).eq('id', user_id).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error updating user details: {e}")
-        return False
-
-# --- REPORT & EXPENSE FUNCTIONS ---
 def upload_receipt(uploaded_file, username):
     supabase = init_connection()
     try:
@@ -132,14 +103,15 @@ def get_reports_for_user(user_id):
 def get_expenses_for_report(report_id):
     supabase = init_connection()
     try:
-        response = supabase.table('expenses').select("*, category:categories(name)").eq('report_id', report_id).execute()
+        response = supabase.table('expenses').select("*, category:categories(id, name)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
             if expense.get('categories'):
                 expense['category_name'] = expense['categories']['name']
+                expense['category_id'] = expense['categories']['id']
                 del expense['categories']
             else:
-                expense['category_name'] = "N/A"
+                expense['category_name'] = None
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}")
@@ -180,9 +152,7 @@ def update_report_status(report_id, status):
         st.error(f"Error updating report status: {e}")
         return False
 
-# --- NEW CATEGORY MANAGEMENT FUNCTIONS ---
 def get_all_categories():
-    """Fetches all expense categories from the database."""
     supabase = init_connection()
     try:
         response = supabase.table('categories').select("id, name, gl_account").order('name', desc=False).execute()
@@ -192,7 +162,6 @@ def get_all_categories():
         return []
 
 def add_category(name, gl_account):
-    """Adds a new category to the database."""
     supabase = init_connection()
     try:
         if supabase.table('categories').select('id', count='exact').eq('name', name).execute().count > 0:
@@ -205,7 +174,6 @@ def add_category(name, gl_account):
         return False
 
 def update_category(category_id, name, gl_account):
-    """Updates an existing category's details."""
     supabase = init_connection()
     try:
         supabase.table('categories').update({"name": name, "gl_account": gl_account}).eq('id', category_id).execute()
@@ -215,11 +183,21 @@ def update_category(category_id, name, gl_account):
         return False
 
 def delete_category(category_id):
-    """Deletes a category from the database."""
     supabase = init_connection()
     try:
         supabase.table('categories').delete().eq('id', category_id).execute()
         return True
     except Exception as e:
         st.error(f"Error deleting category: {e}")
+        return False
+
+# --- NEW FUNCTION TO UPDATE AN EXPENSE ---
+def update_expense_item(expense_id, updates: dict):
+    """Updates an existing expense item with a dictionary of changes."""
+    supabase = init_connection()
+    try:
+        supabase.table('expenses').update(updates).eq('id', expense_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating expense item: {e}")
         return False
