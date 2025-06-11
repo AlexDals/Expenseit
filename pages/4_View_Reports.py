@@ -48,13 +48,11 @@ else:
     
     report_options = {row['display_name']: row['id'] for index, row in reports_df.iterrows()}
     report_options_list = ["-- Select a report --"] + list(report_options.keys())
-    
     selected_report_display_name = st.selectbox("Select a report to view its details:", options=report_options_list, key="report_selector")
 
     if selected_report_display_name != "-- Select a report --":
         selected_report_id = report_options[selected_report_display_name]
         
-        # Clear denial state if a new report is selected
         if st.session_state.denying_report_id and st.session_state.denying_report_id != selected_report_id:
             st.session_state.denying_report_id = None
 
@@ -62,11 +60,12 @@ else:
         st.header(f"Details for: {selected_report_display_name.split(' (')[0]}")
         
         selected_report_details = reports_df[reports_df['id'] == selected_report_id].iloc[0]
-        
+        original_expenses_df = su.get_expenses_for_report(selected_report_id)
+
         # --- Approval & Editing Section (for Admins/Approvers) ---
         if user_role in ['admin', 'approver']:
             st.write(f"**Current Status:** `{selected_report_details['status']}`")
-            if selected_report_details['status'] == 'Denied' and pd.notna(selected_report_details.get('approver_comment')):
+            if pd.notna(selected_report_details.get('approver_comment')):
                 st.error(f"**Reason for Denial:** {selected_report_details['approver_comment']}")
 
             if selected_report_details['status'] == 'Submitted':
@@ -75,15 +74,11 @@ else:
                 with bcol1:
                     if st.button("Approve", type="primary", use_container_width=True):
                         if su.update_report_status(selected_report_id, "Approved"):
-                            st.success("Report Approved!")
-                            st.session_state.denying_report_id = None
-                            st.rerun()
+                            st.success("Report Approved!"); st.session_state.denying_report_id = None; st.rerun()
                 with bcol2:
                     if st.button("Deny", use_container_width=True):
-                        st.session_state.denying_report_id = selected_report_id
-                        st.rerun()
+                        st.session_state.denying_report_id = selected_report_id; st.rerun()
             
-            # --- Conditional Denial Reason Form ---
             if st.session_state.denying_report_id == selected_report_id:
                 st.markdown("---")
                 with st.form("denial_form"):
@@ -94,32 +89,22 @@ else:
                         if st.form_submit_button("Confirm Denial", type="primary", use_container_width=True):
                             if denial_reason:
                                 if su.update_report_status(selected_report_id, "Denied", comment=denial_reason):
-                                    st.warning("Report Denied and comment saved.")
-                                    st.session_state.denying_report_id = None
-                                    st.rerun()
-                            else:
-                                st.error("A reason is required to deny a report.")
+                                    st.warning("Report Denied."); st.session_state.denying_report_id = None; st.rerun()
+                            else: st.error("A reason is required.")
                     with ccol2:
                         if st.form_submit_button("Cancel", use_container_width=True):
-                            st.session_state.denying_report_id = None
-                            st.rerun()
+                            st.session_state.denying_report_id = None; st.rerun()
             st.markdown("---")
-
-        # --- Display/Edit Expense Items ---
-        original_expenses_df = su.get_expenses_for_report(selected_report_id)
-        
-        if not original_expenses_df.empty:
-            if user_role in ['admin', 'approver']:
-                # --- Interactive Data Editor for Admins/Approvers ---
+            
+            if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
-                st.info("You can edit values directly in the table below. Click the 'Save Expense Changes' button when you are done.")
+                st.info("You can edit values directly in the table below.")
                 
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
                 category_names = [""] + [cat['name'] for cat in categories]
                 category_map = {cat['name']: cat['id'] for cat in categories}
                 
-                # Prepare data for editor
                 expenses_to_edit['expense_date'] = pd.to_datetime(expenses_to_edit['expense_date'], errors='coerce')
                 for col in ['amount', 'gst_amount', 'pst_amount', 'hst_amount']:
                     if col in expenses_to_edit.columns: expenses_to_edit[col] = pd.to_numeric(expenses_to_edit[col], errors='coerce').fillna(0)
@@ -141,16 +126,13 @@ else:
                                 original_row = original_expenses_df[original_expenses_df['id'] == expense_id].iloc[0]
                                 if not original_row.equals(row.drop(original_row.index.difference(row.index).tolist(), errors='ignore')):
                                     updates = {"expense_date": str(row['expense_date'].date()), "vendor": row['vendor'], "description": row['description'], "amount": row['amount'], "gst_amount": row.get('gst_amount'), "pst_amount": row.get('pst_amount'), "hst_amount": row.get('hst_amount'), "category_id": category_map.get(row.get('category_name'))}
-                                    if not su.update_expense_item(expense_id, updates):
-                                        all_success = False
-                        if all_success:
-                            st.success("Changes saved successfully!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to save one or more changes.")
-            
-            # --- Static View for Regular Users ---
-            else:
+                                    if not su.update_expense_item(expense_id, updates): all_success = False
+                        if all_success: st.success("Changes saved!"); st.rerun()
+                        else: st.error("Failed to save one or more changes.")
+        
+        # --- Static View for Regular Users ---
+        else:
+            if not original_expenses_df.empty:
                 for index, row in original_expenses_df.iterrows():
                     st.markdown(f"#### Expense: {row.get('vendor', 'N/A')} - ${row.get('amount', 0):.2f}")
                     exp_col1, exp_col2 = st.columns(2)
@@ -162,28 +144,27 @@ else:
                         st.write(f"**GST/TPS:** ${row.get('gst_amount', 0) or 0:.2f}")
                         st.write(f"**PST/QST:** ${row.get('pst_amount', 0) or 0:.2f}")
                         st.write(f"**HST/TVH:** ${row.get('hst_amount', 0) or 0:.2f}")
-
                     with st.expander("View Details (Line Items & Receipt)"):
                         line_items = []
                         if row.get('line_items') and isinstance(row['line_items'], str):
                             try: line_items = json.loads(row['line_items'])
                             except (json.JSONDecodeError, TypeError): line_items = []
                         if line_items:
-                            st.write("**Line Items**")
-                            st.dataframe(pd.DataFrame(line_items))
+                            st.write("**Line Items**"); st.dataframe(pd.DataFrame(line_items))
                         else: st.write("*No line items were extracted for this expense.*")
                         if row.get('receipt_path'):
                             st.write("**Receipt File**")
                             receipt_url = su.get_receipt_public_url(row['receipt_path'])
                             if receipt_url:
-                                if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')):
-                                    st.image(receipt_url)
+                                if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')): st.image(receipt_url)
                                 else: st.link_button("Download Receipt File", receipt_url)
                         else: st.write("*No receipt was uploaded for this expense.*")
                     st.markdown("---")
-            
-            # --- Export Buttons Section ---
+
+        # --- Export Buttons Section ---
+        if not original_expenses_df.empty:
             st.subheader("Export This Full Report")
+            
             clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', selected_report_display_name.split(' (')[0]).replace(' ', '_')
             desired_export_columns = ["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount", "category_name"]
             available_columns_for_export = [col for col in desired_export_columns if col in original_expenses_df.columns]
