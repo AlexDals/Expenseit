@@ -1,20 +1,31 @@
 import streamlit as st
 from utils import supabase_utils as su
+import pandas as pd
 
 # --- Authentication Guard ---
+# Although app.py handles navigation, this is a safeguard.
 if not st.session_state.get("authentication_status"):
-    st.switch_page("pages/1_Login.py")
+    st.warning("Please log in to access the dashboard.")
+    st.stop()
 
-# --- Get Session State ---
+# --- Retrieve authenticator and user info from session state ---
+authenticator = st.session_state.get('authenticator')
 name = st.session_state.get("name")
 username = st.session_state.get("username")
 
+# A second guard to ensure the authenticator object exists
+if not authenticator:
+    st.error("Authentication credentials not found. Please log in again.")
+    st.stop()
+
 # --- Sidebar ---
 st.sidebar.title(f"Welcome {name}!")
-st.connections['authenticator'].logout("Logout", "sidebar")
+# Use the correct authenticator object from session state to render the logout button
+authenticator.logout("Logout", "sidebar")
+
 
 # --- Page Content ---
-st.title("Dashboard")
+st.title("🏠 Dashboard")
 st.write("Navigate using the sidebar to create a new report or view existing reports.")
 st.markdown("---")
 
