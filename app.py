@@ -44,8 +44,8 @@ new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="�
 view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
-# --- FIX: Define the new Category Management page ---
-category_management_page = st.Page("pages/7_📈_Category_Management.py", title="Category Management", icon="📈")
+# --- FIX: Removed the emoji from the filename and the icon parameter ---
+category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
 
 
 # Build the navigation list based on login status and role.
@@ -55,7 +55,6 @@ if is_logged_in:
     if st.session_state.get("role") == 'admin':
         # Add admin-only pages
         nav_pages.append(user_management_page)
-        # --- FIX: Add the new page to the admin view ---
         nav_pages.append(category_management_page)
 else:
     # If the user is logged out, show only the account pages.
