@@ -4,7 +4,7 @@ import re
 from utils import supabase_utils as su
 import bcrypt
 
-st.set_page_config(page_title="Register", layout="centered")
+# The redundant st.set_page_config() call has been removed.
 st.title("Register New User")
 
 if st.session_state.get("authentication_status"):
@@ -20,7 +20,6 @@ with st.form("registration_form"):
     username = st.text_input("Username* (no spaces)")
     password = st.text_input("Password*", type="password")
     confirm_password = st.text_input("Confirm Password*", type="password")
-
     submitted = st.form_submit_button("Register")
 
 if submitted:
@@ -38,10 +37,8 @@ if submitted:
             salt = bcrypt.gensalt()
             hashed_password_bytes = bcrypt.hashpw(password_bytes, salt)
             hashed_password_str = hashed_password_bytes.decode('utf-8')
-            
-            # Call the updated register function, explicitly setting the role to 'user'
             if su.register_user(username, name, email, hashed_password_str, role='user'):
-                st.success("Registration successful! You can now log in from the main page.")
+                st.success("Registration successful! You can now log in.")
                 st.balloons()
         except Exception as e:
             st.error(f"A critical error occurred: {e}")
