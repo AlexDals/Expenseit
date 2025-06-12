@@ -17,7 +17,7 @@ def init_connection() -> Client:
         st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- THIS FUNCTION IS MODIFIED FOR DEBUGGING ---
+# --- THIS FUNCTION IS MODIFIED FOR SAFER DEBUGGING ---
 def fetch_all_users_for_auth():
     """Fetches all users from the database for the authenticator."""
     supabase = init_connection()
@@ -25,9 +25,12 @@ def fetch_all_users_for_auth():
         st.info("DEBUG: Attempting to fetch users from Supabase `users` table...")
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
         
-        # --- TEMPORARY DEBUGGING CODE ---
+        # --- CORRECTED DEBUGGING CODE ---
         st.warning("DEBUG: Raw response from `fetch_all_users_for_auth`:")
-        st.write(response)
+        st.write("Response Data:")
+        st.json(response.data) # Use st.json for clean display of the data list
+        st.write("Response Error:")
+        st.write(response.error) # Display the error part, if any
         # --- END OF DEBUGGING CODE ---
 
         users_data = response.data
@@ -45,7 +48,7 @@ def fetch_all_users_for_auth():
         st.error(f"Error fetching users: {e}")
         return {"usernames": {}}
 
-# --- ALL OTHER FUNCTIONS BELOW THIS LINE ARE UNCHANGED ---
+# --- All other functions below this line remain the same ---
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
     try:
@@ -134,15 +137,14 @@ def get_reports_for_user(user_id):
 def get_expenses_for_report(report_id):
     supabase = init_connection()
     try:
-        response = supabase.table('expenses').select("*, category:categories!left(id, name)").eq('report_id', report_id).execute()
+        response = supabase.table('expenses').select("*, category:categories!left(name)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category']['name']
-                expense['category_id'] = expense['category']['id']
-                del expense['category']
+                expense['category_name'] = expense['category'].get('name')
             else:
                 expense['category_name'] = None
+            expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
@@ -246,10 +248,8 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
         line_items_str = expense_row.get('line_items')
         line_items = []
         if line_items_str and isinstance(line_items_str, str):
-            try:
-                line_items = json.loads(line_items_str)
-            except json.JSONDecodeError:
-                line_items = []
+            try: line_items = json.loads(line_items_str)
+            except json.JSONDecodeError: line_items = []
         if not line_items:
             line_items = [{"description": expense_row.get('description'), "price": expense_row.get('amount')}]
         for item in line_items:
