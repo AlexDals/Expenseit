@@ -13,6 +13,7 @@ if not st.session_state.get("authentication_status"):
 st.title("📄 Create New Expense Report")
 username = st.session_state.get("username")
 user_id = su.get_user_id_by_username(username)
+user_id = st.session_state.get("user_id") # Get user_id from session state
 
 if not user_id:
     st.error("Could not identify user. Please log in again.")
