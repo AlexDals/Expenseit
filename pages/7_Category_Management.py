@@ -1,70 +1,86 @@
 import streamlit as st
 from utils import supabase_utils as su
-from streamlit_authenticator import Authenticate
+import pandas as pd
 
-# --- PAGE CONFIGURATION ---
-# This MUST be the first Streamlit command.
-st.set_page_config(layout="wide", page_title="Expense Reporting")
+# The redundant st.set_page_config() call has been removed from this file.
 
-# --- USER AUTHENTICATION SETUP ---
-# Initialize or retrieve the authenticator from the session state.
-if 'authenticator' not in st.session_state:
-    try:
-        user_credentials = su.fetch_all_users_for_auth()
-        cookie_config = st.secrets.get("cookie", {})
-        
-        authenticator = Authenticate(
-            user_credentials,
-            cookie_config.get('name', 'some_cookie_name'),
-            cookie_config.get('key', 'some_random_key'),
-            cookie_config.get('expiry_days', 30),
-        )
-        st.session_state['authenticator'] = authenticator
-        st.session_state['user_credentials'] = user_credentials
-    except Exception as e:
-        st.error(f"An error occurred during authentication setup: {e}")
-        st.stop()
+st.title("📈 Category & GL Account Management")
+
+# --- Authentication Guard ---
+if not st.session_state.get("authentication_status") or st.session_state.get("role") != 'admin':
+    st.error("You do not have permission to access this page.")
+    st.stop()
+
+# --- Create New Category Form ---
+with st.expander("➕ Create a New Category"):
+    with st.form("new_category_form", clear_on_submit=True):
+        name = st.text_input("Category Name*")
+        gl_account = st.number_input("GL Account Number", value=None, step=1, format="%d")
+        submitted = st.form_submit_button("Create Category")
+        if submitted:
+            if name:
+                if su.add_category(name, gl_account):
+                    st.success(f"Category '{name}' created successfully!")
+                    st.rerun()
+            else:
+                st.error("Category Name is a required field.")
+
+st.markdown("---")
+
+# --- Edit Existing Categories ---
+st.subheader("Edit Existing Categories")
+categories = su.get_all_categories()
+
+if not categories:
+    st.info("No categories created yet. Use the form above to add one.")
 else:
-    authenticator = st.session_state['authenticator']
+    # Use st.data_editor to allow edits, additions, and deletions
+    edited_data = st.data_editor(
+        pd.DataFrame(categories),
+        num_rows="dynamic", # Allow adding and deleting rows
+        use_container_width=True,
+        column_config={
+            "id": None, # Hide the ID
+            "name": st.column_config.TextColumn("Category Name", required=True),
+            "gl_account": st.column_config.NumberColumn("GL Account", format="%d"),
+        },
+        key="category_editor"
+    )
+    
+    if st.button("Save All Changes"):
+        with st.spinner("Saving..."):
+            original_df = pd.DataFrame(categories)
+            edited_df = pd.DataFrame(edited_data)
+            
+            all_success = True
+            
+            # Find and process deleted rows
+            original_ids = set(original_df['id'].dropna())
+            edited_ids = set(edited_df['id'].dropna())
+            deleted_ids = original_ids - edited_ids
+            for cat_id in deleted_ids:
+                if not su.delete_category(cat_id):
+                    all_success = False
+            
+            # Find and process added or updated rows
+            for index, row in edited_df.iterrows():
+                name = row['name']
+                gl = int(row['gl_account']) if pd.notna(row['gl_account']) else None
+                cat_id = row.get("id")
 
-# --- ROLE & ID CHECK AFTER LOGIN ---
-# This block runs every time to ensure the role and user_id are in the session state if logged in.
-if st.session_state.get("authentication_status"):
-    if 'role' not in st.session_state or st.session_state.role is None:
-        username = st.session_state.get("username")
-        if username:
-            user_credentials = st.session_state.get('user_credentials', {})
-            user_details = user_credentials.get("usernames", {}).get(username, {})
-            st.session_state["role"] = user_details.get("role")
-            st.session_state["user_id"] = user_details.get("id")
+                if pd.isna(cat_id): # This is a new row
+                    if not su.add_category(name, gl):
+                        all_success = False
+                else: # This is an existing row to update
+                    original_row = original_df[original_df['id'] == cat_id]
+                    # Check if the row has actually changed
+                    if not original_row.empty and (original_row.iloc[0]['name'] != name or original_row.iloc[0]['gl_account'] != gl):
+                        if not su.update_category(cat_id, name, gl):
+                            all_success = False
 
-# --- PROGRAMMATIC NAVIGATION ---
-is_logged_in = st.session_state.get("authentication_status")
-
-# Define all pages in your app
-login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
-dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
-new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
-view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
-register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
-user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
-# --- FIX: Define the new Category Management page ---
-category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
-
-
-# Build the navigation list based on login status and role.
-if is_logged_in:
-    # If the user is logged in, show the main app pages.
-    nav_pages = [dashboard_page, new_report_page, view_reports_page]
-    if st.session_state.get("role") == 'admin':
-        # Add admin-only pages
-        nav_pages.append(user_management_page)
-        # --- FIX: Add the new page to the admin view ---
-        nav_pages.append(category_management_page)
-else:
-    # If the user is logged out, show only the account pages.
-    nav_pages = [login_page, register_page]
-
-# Create and run the navigation
-pg = st.navigation(nav_pages)
-pg.run()
+            if all_success:
+                st.success("All changes saved successfully!")
+            else:
+                st.error("One or more changes could not be saved. Please check for duplicate names.")
+            
+            st.rerun()
