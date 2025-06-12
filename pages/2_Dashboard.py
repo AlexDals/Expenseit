@@ -3,25 +3,23 @@ from utils import supabase_utils as su
 import pandas as pd
 
 # --- Authentication Guard ---
-# Although app.py handles navigation, this is a safeguard.
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access the dashboard.")
     st.stop()
 
-# --- Retrieve authenticator and user info from session state ---
+# --- Retrieve from session state ---
 authenticator = st.session_state.get('authenticator')
 name = st.session_state.get("name")
 username = st.session_state.get("username")
-user_id = st.session_state.get("user_id") # Get user_id from session state
+# FIX: Get user_id from the session state, not by calling a deleted function
+user_id = st.session_state.get("user_id") 
 
-# A second guard to ensure the authenticator object exists
-if not authenticator:
-    st.error("Authentication credentials not found. Please log in again.")
+if not authenticator or not user_id:
+    st.error("Session data not found. Please log in again.")
     st.stop()
 
 # --- Sidebar ---
 st.sidebar.title(f"Welcome {name}!")
-# Use the correct authenticator object from session state to render the logout button
 authenticator.logout("Logout", "sidebar")
 
 
@@ -32,18 +30,14 @@ st.markdown("---")
 
 st.subheader("Your Dashboard")
 try:
-    user_id = su.get_user_id_by_username(username)
-    if user_id:
-        user_reports_df = su.get_reports_for_user(user_id)
-        if not user_reports_df.empty:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Total Reports Submitted", len(user_reports_df))
-            with col2:
-                st.metric("Total Expenses Claimed", f"${user_reports_df['total_amount'].sum():,.2f}")
-        else:
-            st.info("No reports submitted yet. Go to 'New Report' to create one!")
+    user_reports_df = su.get_reports_for_user(user_id)
+    if not user_reports_df.empty:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Reports Submitted", len(user_reports_df))
+        with col2:
+            st.metric("Total Expenses Claimed", f"${user_reports_df['total_amount'].sum():,.2f}")
     else:
-        st.error("Could not find your user profile.")
+        st.info("No reports submitted yet. Go to 'New Report' to create one!")
 except Exception as e:
     st.error(f"Could not load dashboard: {e}")
