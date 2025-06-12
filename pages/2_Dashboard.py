@@ -12,6 +12,7 @@ if not st.session_state.get("authentication_status"):
 authenticator = st.session_state.get('authenticator')
 name = st.session_state.get("name")
 username = st.session_state.get("username")
+user_id = st.session_state.get("user_id") # Get user_id from session state
 
 # A second guard to ensure the authenticator object exists
 if not authenticator:
