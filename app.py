@@ -2,12 +2,22 @@ import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
+# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
+# --- USER AUTHENTICATION SETUP ---
 if 'authenticator' not in st.session_state:
     try:
         user_credentials = su.fetch_all_users_for_auth()
+        
+        # --- TEMPORARY DEBUGGING CODE ---
+        # This will show us the exact data being passed to the authenticator.
+        st.info("DEBUG: User credentials loaded by the application:")
+        st.json(user_credentials)
+        # --- END OF DEBUGGING CODE ---
+
         cookie_config = st.secrets.get("cookie", {})
+        
         authenticator = Authenticate(
             user_credentials,
             cookie_config.get('name', 'some_cookie_name'),
@@ -22,7 +32,7 @@ if 'authenticator' not in st.session_state:
 else:
     authenticator = st.session_state['authenticator']
 
-# --- ROLE & ID CHECK AFTER LOGIN ---
+# --- ROLE CHECK AFTER LOGIN ---
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -30,11 +40,12 @@ if st.session_state.get("authentication_status"):
             user_credentials = st.session_state.get('user_credentials', {})
             user_details = user_credentials.get("usernames", {}).get(username, {})
             st.session_state["role"] = user_details.get("role")
-            st.session_state["user_id"] = user_details.get("id") # Save user_id to session state
+            st.session_state["user_id"] = user_details.get("id")
 
 # --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 
+# Corrected paths to use the numbered files as you have them set up
 login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
