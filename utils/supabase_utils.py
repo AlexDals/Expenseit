@@ -4,10 +4,11 @@ import pandas as pd
 from datetime import datetime
 import os
 import json
+import xml.etree.ElementTree as ET
+from xml.dom import minidom
 
 @st.cache_resource
 def init_connection() -> Client:
-    # ... (no changes to this function)
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
@@ -16,41 +17,20 @@ def init_connection() -> Client:
         st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- THIS FUNCTION IS MODIFIED ---
 def fetch_all_users_for_auth():
-    """Fetches all users from the database for the authenticator, including ID and role."""
     supabase = init_connection()
     try:
-        # Now also selecting the ID
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
         users_data = response.data
         credentials = {"usernames": {}}
         for user in users_data:
             credentials["usernames"][user["username"]] = {
-                "id": user["id"], # Add ID to the dictionary
-                "email": user["email"],
-                "name": user["name"],
-                "password": user["hashed_password"],
-                "role": user["role"]
+                "id": user["id"], "email": user["email"], "name": user["name"], 
+                "password": user["hashed_password"], "role": user["role"]
             }
         return credentials
     except Exception as e:
-        st.error(f"Error fetching users: {e}")
-        return {"usernames": {}}
-
-# --- THIS FUNCTION IS DELETED ---
-# The get_user_id_by_username function is no longer needed.
-
-# ... (The rest of your utility functions from register_user onwards remain the same) ...
-# I will provide the full file to be safe.
-
-def get_user_role(username: str):
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select('role').eq('username', username).execute()
-        return response.data[0].get('role') if response.data else None
-    except Exception as e:
-        st.error(f"Error fetching user role: {e}"); return None
+        st.error(f"Error fetching users: {e}"); return {"usernames": {}}
 
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
@@ -62,16 +42,37 @@ def register_user(username, name, email, hashed_password, role='user'):
     except Exception as e:
         st.error(f"Error during registration: {e}"); return False
 
-def upload_receipt(uploaded_file, username: str):
+def get_user_role(username):
     supabase = init_connection()
     try:
-        file_bytes = uploaded_file.getvalue()
-        file_ext = os.path.splitext(uploaded_file.name)[1]
-        file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
-        supabase.storage.from_("receipts").upload(file=file_bytes, path=file_path, file_options={"content-type": uploaded_file.type})
-        return file_path
+        response = supabase.table('users').select('role').eq('username', username).execute()
+        return response.data[0].get('role') if response.data else None
     except Exception as e:
-        st.error(f"Error uploading receipt: {e}"); return None
+        st.error(f"Error fetching user role: {e}"); return None
+
+def get_all_users():
+    supabase = init_connection()
+    try:
+        response = supabase.table('users').select("id, username, name, email, role, approver_id, department").execute()
+        return pd.DataFrame(response.data)
+    except Exception as e:
+        st.error(f"Error fetching all users: {e}"); return pd.DataFrame()
+
+def get_all_approvers():
+    supabase = init_connection()
+    try:
+        response = supabase.table('users').select("id, name").eq('role', 'approver').execute()
+        return response.data
+    except Exception as e:
+        st.error(f"Error fetching approvers: {e}"); return []
+
+def update_user_details(user_id, role, approver_id, department):
+    supabase = init_connection()
+    try:
+        supabase.table('users').update({"role": role, "approver_id": approver_id, "department": department}).eq('id', user_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error updating user details: {e}"); return False
 
 def add_report(user_id, report_name, total_amount):
     supabase = init_connection()
@@ -89,8 +90,7 @@ def add_expense_item(report_id, expense_date, vendor, description, amount, curre
             "description": description, "amount": amount, "category_id": category_id,
             "receipt_path": receipt_path, "ocr_text": ocr_text, "gst_amount": gst_amount,
             "pst_amount": pst_amount, "hst_amount": hst_amount,
-            "line_items": json.dumps(line_items) if line_items else None,
-            "currency": currency
+            "line_items": json.dumps(line_items) if line_items else None, "currency": currency
         }).execute()
         return True
     except Exception as e:
@@ -132,7 +132,11 @@ def get_receipt_public_url(path: str):
 def get_reports_for_approver(approver_id):
     supabase = init_connection()
     try:
-        employees_response = supabase.table('users').select('id').eq('approver_id', approver_id).execute()
+        approver_dept_response = supabase.table('users').select('department').eq('id', approver_id).maybe_single().execute()
+        if not approver_dept_response.data or not approver_dept_response.data.get('department'):
+            return pd.DataFrame()
+        approver_department = approver_dept_response.data['department']
+        employees_response = supabase.table('users').select('id').eq('department', approver_department).neq('id', approver_id).execute()
         employee_ids = [user['id'] for user in employees_response.data]
         if not employee_ids: return pd.DataFrame()
         reports_response = supabase.table('reports').select("*, user:users!left(name)").in_('user_id', employee_ids).order('submission_date', desc=True).execute()
@@ -157,30 +161,6 @@ def update_report_status(report_id, status, comment=None):
         return True
     except Exception as e:
         st.error(f"Error updating report status: {e}"); return False
-
-def get_all_users():
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select("id, username, name, email, role, approver_id").execute()
-        return pd.DataFrame(response.data)
-    except Exception as e:
-        st.error(f"Error fetching all users: {e}"); return pd.DataFrame()
-
-def get_all_approvers():
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select("id, name").eq('role', 'approver').execute()
-        return response.data
-    except Exception as e:
-        st.error(f"Error fetching approvers: {e}"); return []
-
-def update_user_details(user_id, role, approver_id):
-    supabase = init_connection()
-    try:
-        supabase.table('users').update({"role": role, "approver_id": approver_id}).eq('id', user_id).execute()
-        return True
-    except Exception as e:
-        st.error(f"Error updating user details: {e}"); return False
 
 def get_all_categories():
     supabase = init_connection()
@@ -215,3 +195,6 @@ def delete_category(category_id):
         return True
     except Exception as e:
         st.error(f"Error deleting category: {e}"); return False
+        
+def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
+    # ... (XML generation function remains the same) ...
