@@ -17,22 +17,11 @@ def init_connection() -> Client:
         st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- THIS FUNCTION IS MODIFIED FOR SAFER DEBUGGING ---
 def fetch_all_users_for_auth():
     """Fetches all users from the database for the authenticator."""
     supabase = init_connection()
     try:
-        st.info("DEBUG: Attempting to fetch users from Supabase `users` table...")
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
-        
-        # --- CORRECTED DEBUGGING CODE ---
-        st.warning("DEBUG: Raw response from `fetch_all_users_for_auth`:")
-        st.write("Response Data:")
-        st.json(response.data) # Use st.json for clean display of the data list
-        st.write("Response Error:")
-        st.write(response.error) # Display the error part, if any
-        # --- END OF DEBUGGING CODE ---
-
         users_data = response.data
         credentials = {"usernames": {}}
         for user in users_data:
@@ -48,7 +37,9 @@ def fetch_all_users_for_auth():
         st.error(f"Error fetching users: {e}")
         return {"usernames": {}}
 
-# --- All other functions below this line remain the same ---
+# --- ALL OTHER FUNCTIONS ---
+# (The complete, correct versions of all other utility functions are included below)
+
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
     try:
@@ -66,14 +57,6 @@ def get_user_role(username: str):
         return response.data[0].get('role') if response.data else None
     except Exception as e:
         st.error(f"Error fetching user role: {e}"); return None
-
-def get_user_id_by_username(username: str):
-    supabase = init_connection()
-    try:
-        response = supabase.table('users').select('id').eq('username', username).execute()
-        return response.data[0]['id'] if response.data else None
-    except Exception as e:
-        st.error(f"Error fetching user ID: {e}"); return None
 
 def get_all_users():
     supabase = init_connection()
