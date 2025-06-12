@@ -14,31 +14,20 @@ def init_connection() -> Client:
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
+        st.error("Supabase credentials not found.")
         st.stop()
 
 def fetch_all_users_for_auth():
-    """Fetches all users from the database for the authenticator."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
         users_data = response.data
         credentials = {"usernames": {}}
         for user in users_data:
-            credentials["usernames"][user["username"]] = {
-                "id": user["id"],
-                "email": user["email"],
-                "name": user["name"],
-                "password": user["hashed_password"],
-                "role": user["role"]
-            }
+            credentials["usernames"][user["username"]] = {"id": user["id"], "email": user["email"], "name": user["name"], "password": user["hashed_password"], "role": user["role"]}
         return credentials
     except Exception as e:
-        st.error(f"Error fetching users: {e}")
-        return {"usernames": {}}
-
-# --- ALL OTHER FUNCTIONS ---
-# (The complete, correct versions of all other utility functions are included below)
+        st.error(f"Error fetching users: {e}"); return {"usernames": {}}
 
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
@@ -50,7 +39,7 @@ def register_user(username, name, email, hashed_password, role='user'):
     except Exception as e:
         st.error(f"Error during registration: {e}"); return False
 
-def get_user_role(username: str):
+def get_user_role(username):
     supabase = init_connection()
     try:
         response = supabase.table('users').select('role').eq('username', username).execute()
@@ -112,14 +101,18 @@ def update_expense_item(expense_id, updates: dict):
     except Exception as e:
         st.error(f"Error updating expense item: {e}"); return False
 
+# --- FUNCTION MODIFIED ---
 def get_reports_for_user(user_id):
+    """Fetches all report summaries for a specific user."""
     supabase = init_connection()
+    # Use !left join to ensure all reports are returned, even if the user was deleted.
     response = supabase.table('reports').select("*, user:users!left(name)").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
 def get_expenses_for_report(report_id):
     supabase = init_connection()
     try:
+        # Use !left join to ensure all expenses are returned, even if category was deleted.
         response = supabase.table('expenses').select("*, category:categories!left(name)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
@@ -137,7 +130,9 @@ def get_receipt_public_url(path: str):
     if not path: return ""
     return supabase.storage.from_('receipts').get_public_url(path)
 
+# --- FUNCTION MODIFIED ---
 def get_reports_for_approver(approver_id):
+    """Fetches reports for an approver based on department."""
     supabase = init_connection()
     try:
         approver_dept_response = supabase.table('users').select('department').eq('id', approver_id).maybe_single().execute()
@@ -147,14 +142,18 @@ def get_reports_for_approver(approver_id):
         employees_response = supabase.table('users').select('id').eq('department', approver_department).neq('id', approver_id).execute()
         employee_ids = [user['id'] for user in employees_response.data]
         if not employee_ids: return pd.DataFrame()
+        # Use !left join to ensure all reports are returned
         reports_response = supabase.table('reports').select("*, user:users!left(name)").in_('user_id', employee_ids).order('submission_date', desc=True).execute()
         return pd.DataFrame(reports_response.data)
     except Exception as e:
         st.error(f"Error fetching reports for approver: {e}"); return pd.DataFrame()
 
+# --- FUNCTION MODIFIED ---
 def get_all_reports():
+    """Fetches all reports for admin view."""
     supabase = init_connection()
     try:
+        # Use !left join to ensure all reports are returned, even if the user was deleted.
         response = supabase.table('reports').select("*, user:users!left(name)").order('submission_date', desc=True).execute()
         return pd.DataFrame(response.data)
     except Exception as e:
