@@ -1,5 +1,6 @@
 import streamlit as st
 from utils import supabase_utils as su
+from utils import ocr_utils # --- FIX: Import the ocr_utils module ---
 import pandas as pd
 from datetime import date
 
@@ -48,7 +49,7 @@ if uploaded_receipt:
         with st.expander("View Raw Extracted Text"):
             st.text_area("OCR Output", raw_text, height=300)
         
-        if "error" in parsed_data:
+        if parsed_data.get("error"):
             st.error(parsed_data["error"])
             parsed_data = {} 
         else:
@@ -76,7 +77,6 @@ else:
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below. You can assign a category to each line item.")
     
-    # Overall Expense Fields
     overall_category = st.selectbox("Overall Expense Category*", options=category_names, help="Select the main category for this entire receipt.")
     currency = st.radio("Currency*", ["CAD", "USD"], horizontal=True)
     
@@ -94,12 +94,9 @@ with st.form("expense_item_form"):
         amount = st.number_input("Amount (Total)", min_value=0.01, value=initial_value, format="%.2f")
         st.markdown("###### Taxes (Editable)")
         tax_col1, tax_col2, tax_col3 = st.columns(3)
-        with tax_col1:
-            gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)), format="%.2f")
-        with tax_col2:
-            pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
-        with tax_col3:
-            hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
+        with tax_col1: gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)), format="%.2f")
+        with tax_col2: pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
+        with tax_col3: hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
 
     # Line Item Category Assignment
     if not st.session_state.line_item_df.empty:
@@ -111,8 +108,7 @@ with st.form("expense_item_form"):
                 "category": st.column_config.SelectboxColumn("Category", options=category_names, required=False),
                 "price": st.column_config.NumberColumn("Price", format="$%.2f")
             },
-            hide_index=True,
-            key="line_item_editor"
+            hide_index=True, key="line_item_editor"
         )
 
     submitted_item = st.form_submit_button("Add This Expense to Report")
