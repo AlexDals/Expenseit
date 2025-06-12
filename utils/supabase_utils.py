@@ -14,78 +14,38 @@ def init_connection() -> Client:
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found.")
+        st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- THIS FUNCTION IS MODIFIED ---
-def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str) -> str:
-    """Generates an XML string for a given report in the specified format."""
-    def create_sub_element(parent, tag, text):
-        element = ET.SubElement(parent, tag)
-        element.text = str(text) if text is not None else ""
-        return element
-
-    record = ET.Element("Record")
-    header = ET.SubElement(record, "Header", {"Table": "PurcHdr", "TableType": "1"})
-    rows_header = ET.SubElement(header, "Rows")
-    row_header = ET.SubElement(rows_header, "Row")
-    
-    first_expense = expenses_data.iloc[0] if not expenses_data.empty else {}
-    currency = first_expense.get('currency', 'CAD') if pd.notna(first_expense.get('currency')) else 'CAD'
-
-    create_sub_element(row_header, "ExSuppId", first_expense.get('vendor', 'N/A')).set("MemberName", "SuppId")
-    create_sub_element(row_header, "PurcDate", str(report_data.get('submission_date', ''))[:10])
-    create_sub_element(row_header, "DocNo", report_data.get('report_name', ''))
-    create_sub_element(row_header, "Remarks", report_data.get('report_name', ''))
-    create_sub_element(row_header, "PurcFrom", first_expense.get('vendor', 'N/A'))
-    
-    total_tax = expenses_data[['gst_amount', 'pst_amount', 'hst_amount']].sum().sum()
-    create_sub_element(row_header, "TaxAmnt", f"{total_tax:.2f}")
-    
-    create_sub_element(row_header, "TotAmnt", f"{report_data.get('total_amount', 0):.2f}")
-    create_sub_element(row_header, "ExCurrencyId", currency).set("MemberName", "CurrencyCode")
-
-    details = ET.SubElement(record, "Details")
-    for _, expense_row in expenses_data.iterrows():
-        detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
-        rows_detail = ET.SubElement(detail, "Rows")
-        
-        line_items_str = expense_row.get('line_items')
-        line_items = []
-        # FIX: Added a try-except block to safely handle empty or invalid JSON data
-        if line_items_str and isinstance(line_items_str, str):
-            try:
-                line_items = json.loads(line_items_str)
-            except json.JSONDecodeError:
-                line_items = [] # Default to empty list if JSON is malformed
-        
-        # If no line items, create one from the main expense description
-        if not line_items:
-            line_items = [{"description": expense_row.get('description'), "price": expense_row.get('amount')}]
-
-        for item in line_items:
-            if item and item.get('price') is not None:
-                row_detail = ET.SubElement(rows_detail, "Row")
-                create_sub_element(row_detail, "Qty", "1")
-                create_sub_element(row_detail, "UnitPrice", f"{item.get('price', 0):.2f}")
-    
-    rough_string = ET.tostring(record, 'utf-8')
-    reparsed = minidom.parseString(rough_string)
-    return reparsed.toprettyxml(indent="  ")
-
-# --- All other functions below this line remain the same ---
+# --- THIS FUNCTION IS MODIFIED FOR DEBUGGING ---
 def fetch_all_users_for_auth():
+    """Fetches all users from the database for the authenticator."""
     supabase = init_connection()
     try:
+        st.info("DEBUG: Attempting to fetch users from Supabase `users` table...")
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
+        
+        # --- TEMPORARY DEBUGGING CODE ---
+        st.warning("DEBUG: Raw response from `fetch_all_users_for_auth`:")
+        st.write(response)
+        # --- END OF DEBUGGING CODE ---
+
         users_data = response.data
         credentials = {"usernames": {}}
         for user in users_data:
-            credentials["usernames"][user["username"]] = {"id": user["id"], "email": user["email"], "name": user["name"], "password": user["hashed_password"], "role": user["role"]}
+            credentials["usernames"][user["username"]] = {
+                "id": user["id"],
+                "email": user["email"],
+                "name": user["name"],
+                "password": user["hashed_password"],
+                "role": user["role"]
+            }
         return credentials
     except Exception as e:
-        st.error(f"Error fetching users: {e}"); return {"usernames": {}}
+        st.error(f"Error fetching users: {e}")
+        return {"usernames": {}}
 
+# --- ALL OTHER FUNCTIONS BELOW THIS LINE ARE UNCHANGED ---
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
     try:
@@ -96,13 +56,21 @@ def register_user(username, name, email, hashed_password, role='user'):
     except Exception as e:
         st.error(f"Error during registration: {e}"); return False
 
-def get_user_role(username):
+def get_user_role(username: str):
     supabase = init_connection()
     try:
         response = supabase.table('users').select('role').eq('username', username).execute()
         return response.data[0].get('role') if response.data else None
     except Exception as e:
         st.error(f"Error fetching user role: {e}"); return None
+
+def get_user_id_by_username(username: str):
+    supabase = init_connection()
+    try:
+        response = supabase.table('users').select('id').eq('username', username).execute()
+        return response.data[0]['id'] if response.data else None
+    except Exception as e:
+        st.error(f"Error fetching user ID: {e}"); return None
 
 def get_all_users():
     supabase = init_connection()
@@ -166,14 +134,15 @@ def get_reports_for_user(user_id):
 def get_expenses_for_report(report_id):
     supabase = init_connection()
     try:
-        response = supabase.table('expenses').select("*, category:categories!left(name)").eq('report_id', report_id).execute()
+        response = supabase.table('expenses').select("*, category:categories!left(id, name)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category'].get('name')
+                expense['category_name'] = expense['category']['name']
+                expense['category_id'] = expense['category']['id']
+                del expense['category']
             else:
                 expense['category_name'] = None
-            expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
@@ -249,3 +218,45 @@ def delete_category(category_id):
         return True
     except Exception as e:
         st.error(f"Error deleting category: {e}"); return False
+
+def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
+    def create_sub_element(parent, tag, text):
+        element = ET.SubElement(parent, tag)
+        element.text = str(text) if text is not None else ""
+        return element
+    record = ET.Element("Record")
+    header = ET.SubElement(record, "Header", {"Table": "PurcHdr", "TableType": "1"})
+    rows_header = ET.SubElement(header, "Rows")
+    row_header = ET.SubElement(rows_header, "Row")
+    first_expense = expenses_data.iloc[0] if not expenses_data.empty else {}
+    currency = first_expense.get('currency', 'CAD') if pd.notna(first_expense.get('currency')) else 'CAD'
+    create_sub_element(row_header, "ExSuppId", first_expense.get('vendor', 'N/A')).set("MemberName", "SuppId")
+    create_sub_element(row_header, "PurcDate", str(report_data.get('submission_date', ''))[:10])
+    create_sub_element(row_header, "DocNo", report_data.get('report_name', ''))
+    create_sub_element(row_header, "Remarks", report_data.get('report_name', ''))
+    create_sub_element(row_header, "PurcFrom", first_expense.get('vendor', 'N/A'))
+    total_tax = expenses_data[['gst_amount', 'pst_amount', 'hst_amount']].sum().sum()
+    create_sub_element(row_header, "TaxAmnt", f"{total_tax:.2f}")
+    create_sub_element(row_header, "TotAmnt", f"{report_data.get('total_amount', 0):.2f}")
+    create_sub_element(row_header, "ExCurrencyId", currency).set("MemberName", "CurrencyCode")
+    details = ET.SubElement(record, "Details")
+    for _, expense_row in expenses_data.iterrows():
+        detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
+        rows_detail = ET.SubElement(detail, "Rows")
+        line_items_str = expense_row.get('line_items')
+        line_items = []
+        if line_items_str and isinstance(line_items_str, str):
+            try:
+                line_items = json.loads(line_items_str)
+            except json.JSONDecodeError:
+                line_items = []
+        if not line_items:
+            line_items = [{"description": expense_row.get('description'), "price": expense_row.get('amount')}]
+        for item in line_items:
+            if item and item.get('price') is not None:
+                row_detail = ET.SubElement(rows_detail, "Row")
+                create_sub_element(row_detail, "Qty", "1")
+                create_sub_element(row_detail, "UnitPrice", f"{item.get('price', 0):.2f}")
+    rough_string = ET.tostring(record, 'utf-8')
+    reparsed = minidom.parseString(rough_string)
+    return reparsed.toprettyxml(indent="  ")
