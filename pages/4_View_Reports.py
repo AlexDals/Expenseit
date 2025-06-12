@@ -14,7 +14,8 @@ if not st.session_state.get("authentication_status"):
 st.title("🗂️ View & Approve Expense Reports")
 username = st.session_state.get("username")
 user_role = st.session_state.get("role")
-user_id = st.session_state.get("user_id") # Get user_id from session state
+# FIX: Get user_id from the session state
+user_id = st.session_state.get("user_id")
 
 
 if not user_id:
