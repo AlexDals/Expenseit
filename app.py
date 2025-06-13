@@ -2,7 +2,6 @@ import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
 # --- USER AUTHENTICATION SETUP ---
@@ -18,14 +17,14 @@ if 'authenticator' not in st.session_state:
             cookie_config.get('expiry_days', 30),
         )
         st.session_state['authenticator'] = authenticator
+        # Store credentials in session state to look up details after login
         st.session_state['user_credentials'] = user_credentials
     except Exception as e:
         st.error(f"An error occurred during authentication setup: {e}")
         st.stop()
-else:
-    authenticator = st.session_state['authenticator']
 
 # --- ROLE & ID CHECK AFTER LOGIN ---
+# This block runs on every rerun. If status is True, it ensures role/id are set.
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -38,6 +37,7 @@ if st.session_state.get("authentication_status"):
 # --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 
+# Define all pages
 login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
@@ -46,6 +46,7 @@ register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
 
+# Build the navigation list based on login status
 if is_logged_in:
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if st.session_state.get("role") == 'admin':
@@ -54,5 +55,6 @@ if is_logged_in:
 else:
     nav_pages = [login_page, register_page]
 
+# Create and run the navigation
 pg = st.navigation(nav_pages)
 pg.run()
