@@ -1,5 +1,6 @@
 import streamlit as st
-from utils import ocr_utils, supabase_utils as su
+from utils import supabase_utils as su
+from utils import ocr_utils
 import pandas as pd
 from datetime import date
 
@@ -17,15 +18,17 @@ if not user_id:
     st.error("User profile not found in session. Please log in again.")
     st.stop()
 
-# Initialize session state variables
 if 'current_report_items' not in st.session_state:
     st.session_state.current_report_items = []
-if 'ocr_results' not in st.session_state:
-    st.session_state.ocr_results = {}
-if 'receipt_path_for_db' not in st.session_state:
-    st.session_state.receipt_path_for_db = None
-if 'raw_text' not in st.session_state:
-    st.session_state.raw_text = ""
+
+# --- Fetch Categories for Dropdowns ---
+try:
+    categories = su.get_all_categories()
+    category_names = [""] + [cat['name'] for cat in categories]
+    category_dict = {cat['name']: cat['id'] for cat in categories}
+except Exception as e:
+    st.error(f"Could not load categories: {e}")
+    categories, category_names, category_dict = [], [""], {}
 
 # --- Main UI ---
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Office Supplies - June")
@@ -37,61 +40,59 @@ uploaded_receipt = st.file_uploader(
     key="receipt_uploader"
 )
 
+# Initialize variables in a way that persists across reruns after upload
+if 'ocr_results' not in st.session_state:
+    st.session_state.ocr_results = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+if 'raw_text' not in st.session_state:
+    st.session_state.raw_text = ""
+if 'receipt_path_for_db' not in st.session_state:
+    st.session_state.receipt_path_for_db = None
+
 if uploaded_receipt:
     with st.spinner("Processing OCR and uploading receipt..."):
-        # When a new file is uploaded, process it and store results in session state
         raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
         st.session_state.raw_text = raw_text
         st.session_state.ocr_results = parsed_data
         
-        # Also upload the file to storage
         st.session_state.receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
         
-        # Rerun to update the form with the new data
+        # We use a rerun to clear the uploader widget and ensure state is clean
         st.rerun()
 
-# --- Display OCR Results and Form ---
-# Use the data stored in the session state to populate the form
+# Use the data stored in the session state
 parsed_data = st.session_state.ocr_results
+raw_text = st.session_state.raw_text
+receipt_path_for_db = st.session_state.receipt_path_for_db
 
-if st.session_state.raw_text:
+if raw_text:
     with st.expander("View Raw Extracted Text"):
-        st.text_area("OCR Output", st.session_state.raw_text, height=300, key="raw_text_display")
+        st.text_area("OCR Output", raw_text, height=300, key="raw_text_display")
     if parsed_data.get("error"):
         st.error(parsed_data["error"])
     else:
         st.success("OCR processing complete. Please verify the values.")
 
-line_items_from_ocr = parsed_data.get("line_items", [])
-if line_items_from_ocr:
+if parsed_data.get("line_items"):
     st.markdown("---")
     st.subheader("Assign Categories to Line Items")
-    # Initialize the data editor's state if it doesn't exist
-    if 'line_item_editor_state' not in st.session_state:
-        st.session_state.line_item_editor_state = pd.DataFrame(line_items_from_ocr)
-    
-    # Add category column if it's missing
-    if 'category' not in st.session_state.line_item_editor_state.columns:
-        st.session_state.line_item_editor_state['category'] = ""
-
-    # Fetch categories for the dropdown
-    categories = su.get_all_categories()
-    category_names = [""] + [cat['name'] for cat in categories]
-    
-    edited_df = st.data_editor(
-        st.session_state.line_item_editor_state,
+    # Use data_editor to allow users to assign categories to OCR'd line items
+    edited_line_items = st.data_editor(
+        pd.DataFrame(parsed_data["line_items"]),
         column_config={
             "category": st.column_config.SelectboxColumn("Category", options=category_names, required=False),
             "price": st.column_config.NumberColumn("Price", format="$%.2f")
         },
-        hide_index=True, key="line_item_editor"
+        hide_index=True,
+        key="line_item_editor"
     )
-    # Persist the edited data
-    st.session_state.edited_line_items = edited_df.to_dict('records')
+    # Save the edited line items to session state to be used on form submission
+    st.session_state.edited_line_items_list = edited_line_items.to_dict('records')
 
+
+# --- Form for adding the expense ---
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below.")
-    overall_category = st.selectbox("Overall Expense Category*", options=category_names)
+    overall_category = st.selectbox("Overall Expense Category*", options=category_names, help="Select the main category for this entire receipt.")
     currency = st.radio("Currency*", ["CAD", "USD"], horizontal=True)
     
     col1, col2 = st.columns(2)
@@ -101,41 +102,41 @@ with st.form("expense_item_form"):
         expense_date = st.date_input("Expense Date", value=initial_date)
         vendor = st.text_input("Vendor Name", value=parsed_data.get("vendor", ""))
         description = st.text_area("Purpose/Description", placeholder="e.g., Monthly office supplies")
+        
     with col2:
         ocr_amount = float(parsed_data.get("total_amount", 0.0))
         initial_value = max(0.01, ocr_amount)
         amount = st.number_input("Amount (Total)", min_value=0.01, value=initial_value, format="%.2f")
         st.markdown("###### Taxes (Editable)")
         tax_col1, tax_col2, tax_col3 = st.columns(3)
-        with tax_col1: gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)))
-        with tax_col2: pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)))
-        with tax_col3: hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)))
+        with tax_col1: gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)), format="%.2f")
+        with tax_col2: pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
+        with tax_col3: hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
 
+    # --- FIX: Submit button MUST be inside the form context ---
     submitted_item = st.form_submit_button("Add This Expense to Report")
     if submitted_item:
         if vendor and amount > 0 and overall_category:
-            category_dict = {cat['name']: cat['id'] for cat in categories}
-            processed_line_items = st.session_state.get('edited_line_items', line_items_from_ocr)
+            processed_line_items = st.session_state.get('edited_line_items_list', [])
             for item in processed_line_items:
                 cat_name = item.get('category')
                 item['category_id'] = category_dict.get(cat_name)
                 item['category_name'] = cat_name
-
+            
             new_item = {
                 "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
                 "category_id": category_dict.get(overall_category), "currency": currency,
-                "receipt_path": st.session_state.receipt_path_for_db, "ocr_text": st.session_state.raw_text,
+                "receipt_path": receipt_path_for_db, "ocr_text": raw_text,
                 "gst_amount": gst_amount, "pst_amount": pst_amount, "hst_amount": hst_amount,
                 "line_items": processed_line_items
             }
             st.session_state.current_report_items.append(new_item)
-            st.success(f"Added '{vendor}' expense. Add more or submit the report below.")
-            # Clear state for the next receipt
+            st.success(f"Added: '{vendor}' expense to report '{report_name}'.")
+            # Clear state for the next receipt after adding it
             st.session_state.ocr_results = {}
             st.session_state.raw_text = ""
             st.session_state.receipt_path_for_db = None
-            st.session_state.line_item_df = pd.DataFrame()
-            st.session_state.edited_line_items = []
+            st.session_state.edited_line_items_list = []
         else:
             st.error("Please fill out Vendor, Amount, and Overall Category.")
 
@@ -143,8 +144,9 @@ with st.form("expense_item_form"):
 if st.session_state.current_report_items:
     st.markdown("---")
     st.subheader("Current Report Items to be Submitted")
+    display_cols = ['date', 'vendor', 'description', 'amount']
     items_df = pd.DataFrame(st.session_state.current_report_items)
-    st.dataframe(items_df[['date', 'vendor', 'description', 'amount']])
+    st.dataframe(items_df[display_cols])
     total_report_amount = items_df['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
     
@@ -163,10 +165,16 @@ if st.session_state.current_report_items:
                             item.get('ocr_text'), item.get('gst_amount'), item.get('pst_amount'),
                             item.get('hst_amount'), item.get('line_items')
                         )
-                        if not success: all_items_saved = False; break
+                        if not success:
+                            all_items_saved = False
+                            break
+                    
                     if all_items_saved:
                         st.success(f"Report '{report_name}' submitted successfully!")
-                        st.balloons(); st.session_state.current_report_items = []
+                        st.balloons()
+                        st.session_state.current_report_items = []
                         st.rerun()
-                    else: st.error("Critical Error: Failed to save one or more items.")
-                else: st.error("Critical Error: Failed to create main report entry.")
+                    else:
+                        st.error("Critical Error: Failed to save one or more items.")
+                else:
+                    st.error("Critical Error: Failed to create main report entry.")
