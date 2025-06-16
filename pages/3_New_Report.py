@@ -5,24 +5,18 @@ from datetime import date
 
 def reset_form_state():
     """
-    Clears all session state variables related to the form and OCR job.
-    This is the single source of truth for resetting the page.
+    Clears all session state variables related to a single OCR job.
+    This is called when a new file is uploaded, cleared, or an item is submitted.
     """
-    # Clear the data from the last OCR scan
-    st.session_state.ocr_results = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+    st.session_state.processing_complete = False
+    st.session_state.ocr_results = {}
     st.session_state.raw_text = ""
     st.session_state.receipt_path_for_db = None
-    
-    # This flag controls the processing loop
-    st.session_state.processing_complete = False
-    
-    # This list holds the results from the line item editor
     if 'edited_line_items' in st.session_state:
         st.session_state.edited_line_items = []
     
-    # This is the key to clearing the file uploader widget itself
-    if 'receipt_uploader' in st.session_state:
-        st.session_state.receipt_uploader = None
+    # NOTE: We no longer try to clear the file uploader's key here, as it causes errors.
+    # The on_change callback is the primary mechanism for reset.
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -59,7 +53,7 @@ uploaded_receipt = st.file_uploader(
     "Upload Receipt (Image or PDF)",
     type=["png", "jpg", "jpeg", "pdf"],
     key="receipt_uploader",
-    on_change=reset_form_state # Reset the state on any change
+    on_change=reset_form_state # This callback handles resetting state when the file changes
 )
 
 # --- Loop-Safe Processing Logic ---
@@ -77,6 +71,9 @@ parsed_data = st.session_state.ocr_results
 raw_text = st.session_state.raw_text
 receipt_path_for_db = st.session_state.receipt_path_for_db
 
+if st.session_state.processing_complete:
+    st.info("To scan a new receipt, clear the uploaded file above by clicking the 'x'.")
+
 if raw_text:
     with st.expander("View Raw Extracted Text", expanded=True):
         st.text_area("OCR Output", raw_text, height=250)
@@ -91,21 +88,22 @@ try:
     category_dict = {cat['name']: cat['id'] for cat in categories}
 except Exception as e:
     st.error(f"Could not load categories: {e}"); categories, category_names, category_dict = [], [""], {}
-
+    
 line_items_from_ocr = parsed_data.get("line_items", [])
 if line_items_from_ocr:
     st.markdown("---"); st.subheader("Assign Categories to Line Items")
     df = pd.DataFrame(line_items_from_ocr)
     if 'category' not in df.columns:
         df['category'] = ""
-    edited_line_items = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor")
-    st.session_state.edited_line_items = edited_line_items.to_dict('records')
+    edited_line_items_df = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor")
+    st.session_state.edited_line_items = edited_line_items_df.to_dict('records')
 
 # --- Form for adding the expense ---
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below.")
     overall_category = st.selectbox("Overall Expense Category*", options=category_names, help="Select the main category for this entire receipt.")
     currency = st.radio("Currency*", ["CAD", "USD"], horizontal=True)
+    
     col1, col2 = st.columns(2)
     with col1:
         parsed_timestamp = pd.to_datetime(parsed_data.get("date"), errors='coerce')
@@ -129,6 +127,7 @@ with st.form("expense_item_form"):
             processed_line_items = st.session_state.get('edited_line_items', [])
             for item in processed_line_items:
                 cat_name = item.get('category'); item['category_id'] = category_dict.get(cat_name); item['category_name'] = cat_name
+            
             new_item = {
                 "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
                 "category_id": category_dict.get(overall_category), "currency": currency,
@@ -138,6 +137,7 @@ with st.form("expense_item_form"):
             }
             st.session_state.current_report_items.append(new_item)
             st.success(f"Added '{vendor}' expense to report '{report_name}'. The form has been cleared.")
+            
             # Call the reset function and rerun the page
             reset_form_state()
             st.rerun()
@@ -152,6 +152,7 @@ if st.session_state.current_report_items:
     st.dataframe(items_df[display_cols])
     total_report_amount = items_df['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
+    
     if st.button("Submit Entire Report", type="primary"):
         if not report_name: st.error("Please provide a Report Name before submitting.")
         else:
@@ -165,5 +166,5 @@ if st.session_state.current_report_items:
                     if all_items_saved:
                         st.success(f"Report '{report_name}' submitted successfully!"); st.balloons()
                         st.session_state.current_report_items = []; st.rerun()
-                    else: st.error("Critical Error: Failed to save one or more items.")
+                    else: st.error("Critical Error: The report header was saved, but one or more expense items failed to save.")
                 else: st.error("Critical Error: Failed to create main report entry.")
