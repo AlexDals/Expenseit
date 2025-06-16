@@ -7,21 +7,27 @@ if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access the dashboard.")
     st.stop()
 
-# --- Retrieve from session state ---
+# --- Retrieve all necessary info from session state ---
 authenticator = st.session_state.get('authenticator')
 name = st.session_state.get("name")
 username = st.session_state.get("username")
-# FIX: Get user_id from the session state, not by calling a deleted function
-user_id = st.session_state.get("user_id") 
+user_id = st.session_state.get("user_id")
 
+# A second guard to ensure the session is fully loaded
 if not authenticator or not user_id:
     st.error("Session data not found. Please log in again.")
     st.stop()
 
 # --- Sidebar ---
 st.sidebar.title(f"Welcome {name}!")
-authenticator.logout("Logout", "sidebar")
 
+# --- DEFINITIVE FIX: Complete Logout Logic ---
+# The logout button now also clears our custom session state keys
+if authenticator.logout("Logout", "sidebar"):
+    st.session_state['role'] = None
+    st.session_state['user_id'] = None
+    st.success("You have been successfully logged out.")
+    st.rerun() # Rerun to immediately go to the login page
 
 # --- Page Content ---
 st.title("🏠 Dashboard")
