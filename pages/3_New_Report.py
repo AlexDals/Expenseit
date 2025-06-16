@@ -3,13 +3,16 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
-def reset_ocr_state():
-    """Resets all session state variables related to a single OCR job."""
+def reset_all_state():
+    """Resets all session state variables related to the current upload and OCR job."""
     st.session_state.processing_complete = False
     st.session_state.ocr_results = {}
     st.session_state.raw_text = ""
     st.session_state.receipt_path_for_db = None
     st.session_state.edited_line_items = []
+    # By setting the file uploader's key to None, we tell Streamlit to clear it.
+    if 'receipt_uploader' in st.session_state:
+        st.session_state.receipt_uploader = None
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -46,7 +49,7 @@ uploaded_receipt = st.file_uploader(
     "Upload Receipt (Image or PDF)",
     type=["png", "jpg", "jpeg", "pdf"],
     key="receipt_uploader",
-    on_change=reset_ocr_state # Reset the state on any change
+    on_change=reset_all_state 
 )
 
 # --- Loop-Safe Processing Logic ---
@@ -56,10 +59,8 @@ if uploaded_receipt and not st.session_state.processing_complete:
         st.session_state.raw_text = raw_text
         st.session_state.ocr_results = parsed_data
         st.session_state.receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
-        
-        # Set the flag to True to prevent this block from running again
         st.session_state.processing_complete = True
-        st.rerun() # Rerun one last time to display the results cleanly
+        st.rerun()
 
 # Use the data stored in the session state to build the rest of the page
 parsed_data = st.session_state.ocr_results
@@ -69,7 +70,7 @@ receipt_path_for_db = st.session_state.receipt_path_for_db
 # Display cancel button only after processing is complete
 if st.session_state.processing_complete:
     if st.button("❌ Cancel and Start Over"):
-        reset_ocr_state()
+        reset_all_state()
         st.rerun()
 
 if raw_text:
@@ -93,14 +94,14 @@ if line_items_from_ocr:
     df = pd.DataFrame(line_items_from_ocr)
     if 'category' not in df.columns:
         df['category'] = ""
-    st.session_state.edited_line_items = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor")
+    edited_line_items_df = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor")
+    st.session_state.edited_line_items = edited_line_items_df.to_dict('records')
 
 # --- Form for adding the expense ---
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below.")
-    overall_category = st.selectbox("Overall Expense Category*", options=category_names, help="Select the main category for this entire receipt.")
+    overall_category = st.selectbox("Overall Expense Category*", options=category_names)
     currency = st.radio("Currency*", ["CAD", "USD"], horizontal=True)
-    
     col1, col2 = st.columns(2)
     with col1:
         parsed_timestamp = pd.to_datetime(parsed_data.get("date"), errors='coerce')
@@ -122,8 +123,6 @@ with st.form("expense_item_form"):
     if submitted_item:
         if vendor and amount > 0 and overall_category:
             processed_line_items = st.session_state.get('edited_line_items', [])
-            if isinstance(processed_line_items, pd.DataFrame):
-                processed_line_items = processed_line_items.to_dict('records')
             for item in processed_line_items:
                 cat_name = item.get('category'); item['category_id'] = category_dict.get(cat_name); item['category_name'] = cat_name
             new_item = {
@@ -134,20 +133,17 @@ with st.form("expense_item_form"):
                 "line_items": processed_line_items
             }
             st.session_state.current_report_items.append(new_item)
-            st.success(f"Added '{vendor}' expense to report '{report_name}'. The form has been cleared for the next receipt.")
-            reset_ocr_state()
+            st.success(f"Added '{vendor}' expense to report '{report_name}'. The form has been cleared.")
+            reset_all_state()
         else:
             st.error("Please fill out Vendor, Amount, and Overall Category.")
 
 # --- CURRENT REPORT DISPLAY & SUBMISSION ---
 if st.session_state.current_report_items:
     st.markdown("---"); st.subheader("Current Report Items to be Submitted")
-    display_cols = ['date', 'vendor', 'description', 'amount']
-    items_df = pd.DataFrame(st.session_state.current_report_items)
-    st.dataframe(items_df[display_cols])
-    total_report_amount = items_df['amount'].sum()
+    st.dataframe(pd.DataFrame(st.session_state.current_report_items)[['date', 'vendor', 'description', 'amount']])
+    total_report_amount = pd.DataFrame(st.session_state.current_report_items)['amount'].sum()
     st.metric("Total Report Amount", f"${total_report_amount:,.2f}")
-    
     if st.button("Submit Entire Report", type="primary"):
         if not report_name: st.error("Please provide a Report Name before submitting.")
         else:
