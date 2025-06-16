@@ -74,6 +74,7 @@ def update_user_details(user_id, role, approver_id, department):
 def add_report(user_id, report_name, total_amount):
     supabase = init_connection()
     try:
+        # FIX: Ensure a status is set when a report is created
         response = supabase.table('reports').insert({"user_id": user_id, "report_name": report_name, "submission_date": datetime.now().isoformat(), "total_amount": total_amount, "status": "Submitted"}).execute()
         return response.data[0]['id'] if response.data else None
     except Exception as e:
@@ -106,27 +107,20 @@ def get_reports_for_user(user_id):
     response = supabase.table('reports').select("*, user:users!left(name)").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
-# --- THIS FUNCTION IS MODIFIED ---
 def get_expenses_for_report(report_id):
-    """Fetches all expense items for a report, including the category name."""
     supabase = init_connection()
     try:
-        # We now only ask for the 'name' from the joined categories table
         response = supabase.table('expenses').select("*, category:categories!left(name)").eq('report_id', report_id).execute()
-        
         expenses = response.data
         for expense in expenses:
-            # FIX: The key from Supabase is 'category' (singular), not 'categories'.
             if expense.get('category') and isinstance(expense['category'], dict):
                 expense['category_name'] = expense['category'].get('name')
             else:
-                expense['category_name'] = None # Explicitly set to None if no category
-            expense.pop('category', None) # Remove the nested dictionary regardless
-            
+                expense['category_name'] = None
+            expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
-        st.error(f"Error fetching expense items: {e}")
-        return pd.DataFrame()
+        st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
 
 def get_receipt_public_url(path: str):
     supabase = init_connection()
@@ -199,31 +193,50 @@ def delete_category(category_id):
         return True
     except Exception as e:
         st.error(f"Error deleting category: {e}"); return False
-        
-def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
+
+# --- NEW FUNCTION: XML EXPORTER ---
+def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str) -> str:
+    """
+    Generates an XML string for a given report in the specified format.
+    """
+    # Helper to create sub-elements cleanly
     def create_sub_element(parent, tag, text):
         element = ET.SubElement(parent, tag)
-        element.text = str(text) if text is not None else ""
+        element.text = str(text) if text is not None and pd.notna(text) else ""
         return element
+
+    # Create the root element
     record = ET.Element("Record")
+
+    # Create Header section
     header = ET.SubElement(record, "Header", {"Table": "PurcHdr", "TableType": "1"})
     rows_header = ET.SubElement(header, "Rows")
     row_header = ET.SubElement(rows_header, "Row")
+    
+    # Use data from the first expense item for header fields
     first_expense = expenses_data.iloc[0] if not expenses_data.empty else {}
     currency = first_expense.get('currency', 'CAD') if pd.notna(first_expense.get('currency')) else 'CAD'
+
+    # Populate Header Row based on your XML structure and our data mapping
     create_sub_element(row_header, "ExSuppId", first_expense.get('vendor', 'N/A')).set("MemberName", "SuppId")
     create_sub_element(row_header, "PurcDate", str(report_data.get('submission_date', ''))[:10])
     create_sub_element(row_header, "DocNo", report_data.get('report_name', ''))
-    create_sub_element(row_header, "Remarks", report_data.get('report_name', ''))
+    create_sub_element(row_header, "Remarks", report_data.get('report_name', '')) # Using report name as requested
     create_sub_element(row_header, "PurcFrom", first_expense.get('vendor', 'N/A'))
+    
+    # Calculate total tax amount by summing all tax columns
     total_tax = expenses_data[['gst_amount', 'pst_amount', 'hst_amount']].sum().sum()
     create_sub_element(row_header, "TaxAmnt", f"{total_tax:.2f}")
+    
     create_sub_element(row_header, "TotAmnt", f"{report_data.get('total_amount', 0):.2f}")
     create_sub_element(row_header, "ExCurrencyId", currency).set("MemberName", "CurrencyCode")
+
+    # Create Details section for Line Items
     details = ET.SubElement(record, "Details")
     for _, expense_row in expenses_data.iterrows():
         detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
         rows_detail = ET.SubElement(detail, "Rows")
+        
         line_items_str = expense_row.get('line_items')
         line_items = []
         if line_items_str and isinstance(line_items_str, str):
@@ -231,13 +244,19 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
                 line_items = json.loads(line_items_str)
             except json.JSONDecodeError:
                 line_items = []
+        
+        # If no line items were extracted, use the main expense as a single line item
         if not line_items:
             line_items = [{"description": expense_row.get('description'), "price": expense_row.get('amount')}]
+
         for item in line_items:
             if item and item.get('price') is not None:
                 row_detail = ET.SubElement(rows_detail, "Row")
+                # Per your request, Qty is hard-coded to 1
                 create_sub_element(row_detail, "Qty", "1")
                 create_sub_element(row_detail, "UnitPrice", f"{item.get('price', 0):.2f}")
+    
+    # Convert the ElementTree object to a nicely formatted string
     rough_string = ET.tostring(record, 'utf-8')
     reparsed = minidom.parseString(rough_string)
     return reparsed.toprettyxml(indent="  ")
