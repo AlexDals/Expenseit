@@ -20,7 +20,6 @@ if not user_id:
     st.error("User profile not found in session. Please log in again.")
     st.stop()
 
-# --- Initialize session state for denial workflow ---
 if 'denying_report_id' not in st.session_state:
     st.session_state.denying_report_id = None
 
@@ -39,7 +38,7 @@ elif user_role == 'admin':
 if reports_df.empty:
     st.info("No reports found for your view.")
 else:
-    # --- Report Selection Dropdown ---
+    # --- Report Selection ---
     if 'user' in reports_df.columns:
         reports_df['submitter_name'] = reports_df['user'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Unknown User')
         reports_df['submitter_name'] = reports_df['submitter_name'].fillna('Unknown User')
@@ -66,12 +65,12 @@ else:
         selected_report_details = reports_df[reports_df['id'] == selected_report_id].iloc[0]
         original_expenses_df = su.get_expenses_for_report(selected_report_id)
 
-        # --- Combined Section for Admins/Approvers ---
+        # --- Approval & Editing Section (for Admins/Approvers) ---
         if user_role in ['admin', 'approver']:
-            # Approval Actions
             st.write(f"**Current Status:** `{selected_report_details['status']}`")
             if pd.notna(selected_report_details.get('approver_comment')):
                 st.error(f"**Reason for Denial:** {selected_report_details['approver_comment']}")
+
             if selected_report_details['status'] == 'Submitted':
                 st.write("Actions:")
                 bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
@@ -100,9 +99,10 @@ else:
                             st.session_state.denying_report_id = None; st.rerun()
             st.markdown("---")
             
-            # Expense Details Editor
             if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
+                st.info("You can edit values directly in the table below.")
+                
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
                 category_names = [""] + [cat['name'] for cat in categories]
@@ -111,46 +111,40 @@ else:
                 expenses_to_edit['expense_date'] = pd.to_datetime(expenses_to_edit['expense_date'], errors='coerce')
                 for col in ['amount', 'gst_amount', 'pst_amount', 'hst_amount']:
                     if col in expenses_to_edit.columns: expenses_to_edit[col] = pd.to_numeric(expenses_to_edit[col], errors='coerce').fillna(0)
-                if 'category_name' not in expenses_to_edit.columns: expenses_to_edit['category_name'] = ""
+                if 'category_name' not in expenses_to_edit.columns:
+                     expenses_to_edit['category_name'] = ""
                 expenses_to_edit['category_name'] = expenses_to_edit['category_name'].fillna("").astype(str)
                 valid_category_options = set(category_names)
                 expenses_to_edit['category_name'] = expenses_to_edit['category_name'].apply(lambda x: x if x in valid_category_options else "")
 
                 edited_expenses_df = st.data_editor(expenses_to_edit, key=f"editor_{selected_report_id}", num_rows="dynamic", hide_index=True, column_config={"id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, "line_items": None, "created_at": None, "category_id": None, "expense_date": st.column_config.DateColumn("Date", required=True), "vendor": "Vendor", "description": "Purpose", "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True), "category_name": st.column_config.SelectboxColumn("Category", options=category_names, required=False), "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"), "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"), "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f")})
                 
+                # --- FIX: New, simpler save logic ---
                 if st.button("Save Expense Changes"):
                     with st.spinner("Saving..."):
                         all_success = True
                         for index, row in edited_expenses_df.iterrows():
                             expense_id = row.get('id')
                             if pd.notna(expense_id):
-                                updates = {"expense_date": str(row['expense_date'].date()), "vendor": row['vendor'], "description": row['description'], "amount": row['amount'], "gst_amount": row.get('gst_amount'), "pst_amount": row.get('pst_amount'), "hst_amount": row.get('hst_amount'), "category_id": category_map.get(row.get('category_name'))}
-                                if not su.update_expense_item(expense_id, updates): all_success = False
-                        if all_success: st.success("Changes saved!"); st.rerun()
-                        else: st.error("Failed to save one or more changes.")
-            
-            # --- Export Buttons Section ---
-            if not original_expenses_df.empty:
-                st.markdown("---")
-                st.subheader("Export This Full Report")
-                clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', id_to_display_name_map[selected_report_id].split(' (')[0]).replace(' ', '_')
-                export_df = original_expenses_df[["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount", "category_name"]].copy()
-                btn_col1, btn_col2, btn_col3 = st.columns(3)
-                with btn_col1:
-                    csv_data = export_df.to_csv(index=False).encode('utf-8')
-                    st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
-                with btn_col2:
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                        export_df.to_excel(writer, index=False, sheet_name='Expenses')
-                    excel_data = output.getvalue()
-                    st.download_button(label="📄 Download as Excel", data=excel_data, file_name=f"{clean_report_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-                with btn_col3:
-                     submitter_name = selected_report_details.get('submitter_name', 'N/A')
-                     xml_data = su.generate_report_xml(selected_report_details, original_expenses_df, submitter_name)
-                     st.download_button(label="💿 Download as XML", data=xml_data, file_name=f"{clean_report_name}.xml", mime="application/xml", use_container_width=True)
+                                updates = {
+                                    "expense_date": str(row['expense_date'].date()) if pd.notna(row['expense_date']) else None,
+                                    "vendor": row['vendor'],
+                                    "description": row['description'],
+                                    "amount": row['amount'],
+                                    "gst_amount": row.get('gst_amount'),
+                                    "pst_amount": row.get('pst_amount'),
+                                    "hst_amount": row.get('hst_amount'),
+                                    "category_id": category_map.get(row.get('category_name'))
+                                }
+                                if not su.update_expense_item(expense_id, updates):
+                                    all_success = False
+                        if all_success:
+                            st.success("Changes saved successfully!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save one or more changes.")
         
-        # --- Static View for Regular Users (Does not include export buttons) ---
+        # --- Static View for Regular Users ---
         else:
             if not original_expenses_df.empty:
                 for index, row in original_expenses_df.iterrows():
@@ -180,5 +174,28 @@ else:
                                 else: st.link_button("Download Receipt File", receipt_url)
                         else: st.write("*No receipt was uploaded for this expense.*")
                     st.markdown("---")
-            else:
-                st.info("No expense items found for this report.")
+        
+        # --- Export Buttons Section ---
+        if not original_expenses_df.empty:
+            st.subheader("Export This Full Report")
+            clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', id_to_display_name_map[selected_report_id].split(' (')[0]).replace(' ', '_')
+            desired_export_columns = ["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount", "category_name"]
+            available_columns_for_export = [col for col in desired_export_columns if col in original_expenses_df.columns]
+            if available_columns_for_export:
+                export_df = original_expenses_df[available_columns_for_export].copy()
+                btn_col1, btn_col2, btn_col3 = st.columns(3)
+                with btn_col1:
+                    csv_data = export_df.to_csv(index=False).encode('utf-8')
+                    st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
+                with btn_col2:
+                    output = io.BytesIO()
+                    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                        export_df.to_excel(writer, index=False, sheet_name='Expenses')
+                    excel_data = output.getvalue()
+                    st.download_button(label="📄 Download as Excel", data=excel_data, file_name=f"{clean_report_name}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+                with btn_col3:
+                     submitter_name = selected_report_details.get('submitter_name', 'N/A')
+                     xml_data = su.generate_report_xml(selected_report_details, original_expenses_df, submitter_name)
+                     st.download_button(label="💿 Download as XML", data=xml_data, file_name=f"{clean_report_name}.xml", mime="application/xml", use_container_width=True)
+        else:
+            st.info("No expense items to display or export for this report.")
