@@ -3,16 +3,6 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
-def reset_form_state():
-    st.session_state.processing_complete = False
-    st.session_state.ocr_results = {}
-    st.session_state.raw_text = ""
-    st.session_state.receipt_path_for_db = None
-    if 'edited_line_items' in st.session_state:
-        st.session_state.edited_line_items = []
-    if 'receipt_uploader' in st.session_state:
-        st.session_state.receipt_uploader = None
-
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
@@ -34,44 +24,33 @@ except Exception as e:
 
 report_name = st.text_input("Report Name/Purpose*", placeholder="e.g., Office Supplies - June")
 st.subheader("Add Expense/Receipt")
-uploaded_receipt = st.file_uploader("Upload Receipt (Image or PDF)", type=["png", "jpg", "jpeg", "pdf"], key="receipt_uploader", on_change=reset_form_state)
+uploaded_receipt = st.file_uploader("Upload Receipt (Image or PDF)", type=["png", "jpg", "jpeg", "pdf"])
 
-if 'processing_complete' not in st.session_state:
-    st.session_state.processing_complete = False
-if uploaded_receipt and not st.session_state.processing_complete:
-    with st.spinner("Processing OCR and uploading receipt..."):
-        raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
-        st.session_state.raw_text = raw_text; st.session_state.ocr_results = parsed_data
-        st.session_state.receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
-        st.session_state.processing_complete = True
-        st.rerun()
-
-parsed_data = st.session_state.get('ocr_results', {})
-raw_text = st.session_state.get('raw_text', "")
-receipt_path_for_db = st.session_state.get('receipt_path_for_db')
-
-if st.session_state.processing_complete:
-    if st.button("❌ Scan Another Receipt"):
-        reset_form_state(); st.rerun()
-
-if raw_text:
-    with st.expander("View Raw Extracted Text", expanded=True):
-        st.text_area("OCR Output", raw_text, height=250, disabled=True)
-    if parsed_data.get("error"):
-        st.error(parsed_data["error"])
-    else:
-        st.success("OCR processing complete. Please verify the values below.")
-
-line_items_from_ocr = parsed_data.get("line_items", [])
+parsed_data, raw_text, receipt_path_for_db = {}, "", None
 if 'edited_line_items' not in st.session_state:
     st.session_state.edited_line_items = []
+
+if uploaded_receipt:
+    with st.spinner("Processing OCR and uploading receipt..."):
+        raw_text, parsed_data = ocr_utils.extract_and_parse_file(uploaded_receipt)
+        with st.expander("View Raw Extracted Text"):
+            st.text_area("OCR Output", raw_text, height=300)
+        if parsed_data.get("error"):
+            st.error(parsed_data["error"]); parsed_data = {}
+        else:
+            st.success("OCR processing complete.")
+        receipt_path_for_db = su.upload_receipt(uploaded_receipt, username)
+        if receipt_path_for_db: st.success("Receipt uploaded successfully!")
+        else: st.error("Failed to upload receipt.")
+else:
+    parsed_data = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
+
+line_items_from_ocr = parsed_data.get("line_items", [])
 if line_items_from_ocr:
     st.markdown("---"); st.subheader("Assign Categories to Line Items")
     df = pd.DataFrame(line_items_from_ocr)
-    if 'category' not in df.columns:
-        df['category'] = ""
-    edited_line_items = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor")
-    st.session_state.edited_line_items = edited_line_items.to_dict('records')
+    if 'category' not in df.columns: df['category'] = ""
+    st.session_state.edited_line_items = st.data_editor(df, column_config={"category": st.column_config.SelectboxColumn("Category", options=category_names, required=False), "price": st.column_config.NumberColumn("Price", format="$%.2f")}, hide_index=True, key="line_item_editor").to_dict('records')
 
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below.")
@@ -94,14 +73,13 @@ with st.form("expense_item_form"):
         with tax_col1: gst_amount = st.number_input("GST/TPS", min_value=0.0, value=float(parsed_data.get("gst_amount", 0.0)), format="%.2f")
         with tax_col2: pst_amount = st.number_input("PST/QST", min_value=0.0, value=float(parsed_data.get("pst_amount", 0.0)), format="%.2f")
         with tax_col3: hst_amount = st.number_input("HST/TVH", min_value=0.0, value=float(parsed_data.get("hst_amount", 0.0)), format="%.2f")
-
+    
     submitted_item = st.form_submit_button("Add This Expense to Report")
     if submitted_item:
         if vendor and amount > 0 and overall_category:
             processed_line_items = st.session_state.get('edited_line_items', [])
             for item in processed_line_items:
                 cat_name = item.get('category'); item['category_id'] = category_dict.get(cat_name); item['category_name'] = cat_name
-            
             new_item = {
                 "date": expense_date, "vendor": vendor, "description": description, "amount": amount,
                 "category_id": category_dict.get(overall_category), "currency": currency,
@@ -110,8 +88,7 @@ with st.form("expense_item_form"):
                 "line_items": processed_line_items
             }
             st.session_state.current_report_items.append(new_item)
-            st.success(f"Added '{vendor}' expense. The form is ready for the next receipt.")
-            reset_form_state()
+            st.success(f"Added: '{vendor}' expense to report '{report_name}'.")
         else:
             st.error("Please fill out Vendor, Amount, and Overall Category.")
 
