@@ -3,17 +3,26 @@ from utils import ocr_utils, supabase_utils as su
 import pandas as pd
 from datetime import date
 
-def reset_ocr_state():
+def reset_form_state():
     """
-    Clears all session state variables related to a single OCR job.
-    This is called whenever the file uploader is changed (file added or cleared).
+    Clears all session state variables related to the form and OCR job.
+    This is the single source of truth for resetting the page.
     """
-    st.session_state.processing_complete = False
-    st.session_state.ocr_results = {}
+    # Clear the data from the last OCR scan
+    st.session_state.ocr_results = {"date": None, "vendor": "", "total_amount": 0.0, "gst_amount": 0.0, "pst_amount": 0.0, "hst_amount": 0.0, "line_items": []}
     st.session_state.raw_text = ""
     st.session_state.receipt_path_for_db = None
+    
+    # This flag controls the processing loop
+    st.session_state.processing_complete = False
+    
+    # This list holds the results from the line item editor
     if 'edited_line_items' in st.session_state:
         st.session_state.edited_line_items = []
+    
+    # This is the key to clearing the file uploader widget itself
+    if 'receipt_uploader' in st.session_state:
+        st.session_state.receipt_uploader = None
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -50,7 +59,7 @@ uploaded_receipt = st.file_uploader(
     "Upload Receipt (Image or PDF)",
     type=["png", "jpg", "jpeg", "pdf"],
     key="receipt_uploader",
-    on_change=reset_ocr_state # This callback handles all state resets
+    on_change=reset_form_state # Reset the state on any change
 )
 
 # --- Loop-Safe Processing Logic ---
@@ -68,9 +77,6 @@ parsed_data = st.session_state.ocr_results
 raw_text = st.session_state.raw_text
 receipt_path_for_db = st.session_state.receipt_path_for_db
 
-if st.session_state.processing_complete:
-    st.info("To start over, clear the uploaded file above by clicking the 'x'.")
-
 if raw_text:
     with st.expander("View Raw Extracted Text", expanded=True):
         st.text_area("OCR Output", raw_text, height=250)
@@ -85,7 +91,7 @@ try:
     category_dict = {cat['name']: cat['id'] for cat in categories}
 except Exception as e:
     st.error(f"Could not load categories: {e}"); categories, category_names, category_dict = [], [""], {}
-    
+
 line_items_from_ocr = parsed_data.get("line_items", [])
 if line_items_from_ocr:
     st.markdown("---"); st.subheader("Assign Categories to Line Items")
@@ -98,7 +104,7 @@ if line_items_from_ocr:
 # --- Form for adding the expense ---
 with st.form("expense_item_form"):
     st.write("Verify the extracted data below.")
-    overall_category = st.selectbox("Overall Expense Category*", options=category_names)
+    overall_category = st.selectbox("Overall Expense Category*", options=category_names, help="Select the main category for this entire receipt.")
     currency = st.radio("Currency*", ["CAD", "USD"], horizontal=True)
     col1, col2 = st.columns(2)
     with col1:
@@ -132,7 +138,8 @@ with st.form("expense_item_form"):
             }
             st.session_state.current_report_items.append(new_item)
             st.success(f"Added '{vendor}' expense to report '{report_name}'. The form has been cleared.")
-            reset_ocr_state() # Clear the state for the next receipt
+            # Call the reset function and rerun the page
+            reset_form_state()
             st.rerun()
         else:
             st.error("Please fill out Vendor, Amount, and Overall Category.")
