@@ -38,7 +38,7 @@ elif user_role == 'admin':
 if reports_df.empty:
     st.info("No reports found for your view.")
 else:
-    # --- Report Selection ---
+    # --- Report Selection Dropdown ---
     if 'user' in reports_df.columns:
         reports_df['submitter_name'] = reports_df['user'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Unknown User')
         reports_df['submitter_name'] = reports_df['submitter_name'].fillna('Unknown User')
@@ -49,11 +49,7 @@ else:
     id_to_display_name_map = {row['id']: row['display_name'] for index, row in reports_df.iterrows()}
     report_id_options = ["-- Select a report --"] + list(id_to_display_name_map.keys())
     
-    selected_report_id = st.selectbox(
-        "Select a report to view its details:",
-        options=report_id_options,
-        format_func=lambda report_id: id_to_display_name_map.get(report_id, "-- Select a report --")
-    )
+    selected_report_id = st.selectbox("Select a report to view its details:", options=report_id_options, format_func=lambda report_id: id_to_display_name_map.get(report_id, "-- Select a report --"))
 
     if selected_report_id != "-- Select a report --":
         if st.session_state.denying_report_id and st.session_state.denying_report_id != selected_report_id:
@@ -70,14 +66,12 @@ else:
             st.write(f"**Current Status:** `{selected_report_details['status']}`")
             if pd.notna(selected_report_details.get('approver_comment')):
                 st.error(f"**Reason for Denial:** {selected_report_details['approver_comment']}")
-
             if selected_report_details['status'] == 'Submitted':
                 st.write("Actions:")
                 bcol1, bcol2, bcol3 = st.columns([1, 1, 5])
                 with bcol1:
                     if st.button("Approve", type="primary", use_container_width=True):
-                        if su.update_report_status(selected_report_id, "Approved"):
-                            st.success("Report Approved!"); st.session_state.denying_report_id = None; st.rerun()
+                        if su.update_report_status(selected_report_id, "Approved"): st.success("Report Approved!"); st.session_state.denying_report_id = None; st.rerun()
                 with bcol2:
                     if st.button("Deny", use_container_width=True):
                         st.session_state.denying_report_id = selected_report_id; st.rerun()
@@ -101,7 +95,7 @@ else:
             
             if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
-                st.info("You can edit values directly in the table below.")
+                st.info("You can edit values directly in the table below. A 'Save' button will appear below if changes are made.")
                 
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
@@ -111,39 +105,39 @@ else:
                 expenses_to_edit['expense_date'] = pd.to_datetime(expenses_to_edit['expense_date'], errors='coerce')
                 for col in ['amount', 'gst_amount', 'pst_amount', 'hst_amount']:
                     if col in expenses_to_edit.columns: expenses_to_edit[col] = pd.to_numeric(expenses_to_edit[col], errors='coerce').fillna(0)
-                if 'category_name' not in expenses_to_edit.columns:
-                     expenses_to_edit['category_name'] = ""
+                if 'category_name' not in expenses_to_edit.columns: expenses_to_edit['category_name'] = ""
                 expenses_to_edit['category_name'] = expenses_to_edit['category_name'].fillna("").astype(str)
                 valid_category_options = set(category_names)
                 expenses_to_edit['category_name'] = expenses_to_edit['category_name'].apply(lambda x: x if x in valid_category_options else "")
 
-                edited_expenses_df = st.data_editor(expenses_to_edit, key=f"editor_{selected_report_id}", num_rows="dynamic", hide_index=True, column_config={"id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, "line_items": None, "created_at": None, "category_id": None, "expense_date": st.column_config.DateColumn("Date", required=True), "vendor": "Vendor", "description": "Purpose", "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True), "category_name": st.column_config.SelectboxColumn("Category", options=category_names, required=False), "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"), "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"), "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f")})
+                editor_key = f"editor_{selected_report_id}"
+                st.data_editor(expenses_to_edit, key=editor_key, num_rows="dynamic", hide_index=True, column_config={"id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, "line_items": None, "created_at": None, "category_id": None, "expense_date": st.column_config.DateColumn("Date", required=True), "vendor": "Vendor", "description": "Purpose", "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True), "category_name": st.column_config.SelectboxColumn("Category", options=category_names, required=False), "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"), "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"), "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f")})
                 
-                # --- FIX: New, simpler save logic ---
-                if st.button("Save Expense Changes"):
-                    with st.spinner("Saving..."):
-                        all_success = True
-                        for index, row in edited_expenses_df.iterrows():
-                            expense_id = row.get('id')
-                            if pd.notna(expense_id):
-                                updates = {
-                                    "expense_date": str(row['expense_date'].date()) if pd.notna(row['expense_date']) else None,
-                                    "vendor": row['vendor'],
-                                    "description": row['description'],
-                                    "amount": row['amount'],
-                                    "gst_amount": row.get('gst_amount'),
-                                    "pst_amount": row.get('pst_amount'),
-                                    "hst_amount": row.get('hst_amount'),
-                                    "category_id": category_map.get(row.get('category_name'))
-                                }
-                                if not su.update_expense_item(expense_id, updates):
+                # --- NEW, ROBUST SAVE LOGIC ---
+                # Check the session state for the data editor's changes
+                if st.session_state[editor_key].get("edited_rows"):
+                    if st.button("Save Expense Changes"):
+                        with st.spinner("Saving..."):
+                            edited_rows = st.session_state[editor_key]["edited_rows"]
+                            all_success = True
+                            
+                            for row_index, changes in edited_rows.items():
+                                expense_id = original_expenses_df.iloc[row_index]['id']
+                                
+                                # Convert category name back to ID if it was changed
+                                if "category_name" in changes:
+                                    changes["category_id"] = category_map.get(changes["category_name"])
+                                    del changes["category_name"] # Don't try to save the name column
+
+                                if not su.update_expense_item(expense_id, changes):
                                     all_success = False
-                        if all_success:
-                            st.success("Changes saved successfully!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to save one or more changes.")
-        
+                            
+                            if all_success:
+                                st.success("Changes saved successfully!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to save one or more changes.")
+
         # --- Static View for Regular Users ---
         else:
             if not original_expenses_df.empty:
