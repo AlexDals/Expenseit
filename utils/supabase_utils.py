@@ -51,6 +51,15 @@ def get_user_role(username: str):
     except Exception as e:
         st.error(f"Error fetching user role: {e}"); return None
 
+def get_user_id_by_username(username: str):
+    """Fetches the UUID for a given username."""
+    supabase = init_connection()
+    try:
+        response = supabase.table('users').select('id').eq('username', username).execute()
+        return response.data[0]['id'] if response.data else None
+    except Exception as e:
+        st.error(f"Error fetching user ID: {e}"); return None
+
 def get_all_users():
     """Fetches all user data for the management page."""
     supabase = init_connection()
@@ -78,6 +87,18 @@ def update_user_details(user_id, role, approver_id, department):
     except Exception as e:
         st.error(f"Error updating user details: {e}"); return False
 
+def upload_receipt(uploaded_file, username: str):
+    """Uploads a receipt file to Supabase Storage."""
+    supabase = init_connection()
+    try:
+        file_bytes = uploaded_file.getvalue()
+        file_ext = os.path.splitext(uploaded_file.name)[1]
+        file_path = f"{username}/{datetime.now().timestamp()}_{datetime.now().strftime('%Y%m%d%H%M%S')}{file_ext}"
+        supabase.storage.from_("receipts").upload(file=file_bytes, path=file_path, file_options={"content-type": uploaded_file.type})
+        return file_path
+    except Exception as e:
+        st.error(f"Error uploading receipt: {e}"); return None
+
 def add_report(user_id, report_name, total_amount):
     """Adds a new report header to the database."""
     supabase = init_connection()
@@ -88,7 +109,7 @@ def add_report(user_id, report_name, total_amount):
         st.error(f"Error adding report: {e}"); return None
 
 def add_expense_item(report_id, expense_date, vendor, description, amount, currency='CAD', category_id=None, receipt_path=None, ocr_text=None, gst_amount=None, pst_amount=None, hst_amount=None, line_items=None):
-    """Adds a new expense item to a report."""
+    """Adds a new expense item to a report, now including the currency."""
     supabase = init_connection()
     try:
         supabase.table('expenses').insert({
@@ -126,11 +147,11 @@ def get_expenses_for_report(report_id):
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category'].get('name')
-                expense['category_id'] = expense['category'].get('id')
+                expense['category_name'] = expense['category']['name']
+                expense['category_id'] = expense['category']['id']
+                del expense['category']
             else:
                 expense['category_name'] = None
-            expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
@@ -259,7 +280,7 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
         detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
         default_values_det = ET.SubElement(detail, "DefaultValues")
         create_sub_element(default_values_det, "Member", "0").set("Name", "TaxIncluded")
-
+        
         rows_detail = ET.SubElement(detail, "Rows")
         
         line_items_str = expense_row.get('line_items')
