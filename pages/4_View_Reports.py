@@ -4,6 +4,8 @@ import pandas as pd
 import io
 import re
 import json
+import zipfile # New import for zip files
+import os # New import for getting filenames
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -227,5 +229,26 @@ else:
                         submitter_name = selected_report_details.get('submitter_name', 'N/A')
                         xml_data = su.generate_report_xml(selected_report_details, original_expenses_df, submitter_name)
                         st.download_button(label="💿 Download as XML", data=xml_data, file_name=f"{clean_report_name}.xml", mime="application/xml", use_container_width=True)
+                    with btn_col4:
+                        receipt_paths = original_expenses_df['receipt_path'].dropna().tolist()
+                        if receipt_paths:
+                            # Create a zip file in memory
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                for path in receipt_paths:
+                                    file_bytes = su.download_file_bytes(path)
+                                    if file_bytes:
+                                        # Get the original filename from the path
+                                        file_name = os.path.basename(path)
+                                        zipf.writestr(file_name, file_bytes)
+                            
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                label="🧾 Download Receipts (.zip)",
+                                data=zip_buffer,
+                                file_name=f"{clean_report_name}_receipts.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
                 else:
                     st.warning("No data with exportable columns found for this report.")
