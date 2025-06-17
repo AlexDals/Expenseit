@@ -24,7 +24,6 @@ if 'authenticator' not in st.session_state:
         st.stop()
 
 # --- ROLE & ID CHECK AFTER LOGIN ---
-# This block runs on every rerun to ensure role/id are set if the user is logged in.
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -38,7 +37,7 @@ if st.session_state.get("authentication_status"):
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
-# Define all possible pages as objects
+# Define all pages as objects
 login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
@@ -47,21 +46,31 @@ register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
 
-# Define the page lists for each state
-logged_out_pages = [login_page, register_page]
-user_app_pages = [dashboard_page, new_report_page, view_reports_page]
-admin_app_pages = [dashboard_page, new_report_page, view_reports_page, user_management_page, category_management_page]
-
-# Select the correct list of pages based on the user's role and login status
-pages_to_show = []
-if not is_logged_in:
-    pages_to_show = logged_out_pages
-else:
+# Build the navigation list based on login status and role.
+if is_logged_in:
+    nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if user_role == 'admin':
-        pages_to_show = admin_app_pages
-    else: # This applies to both 'user' and 'approver' roles
-        pages_to_show = user_app_pages
+        # If user is an admin, add the management pages to the list
+        nav_pages.append(user_management_page)
+        nav_pages.append(category_management_page)
+    else:
+        # --- DEFINITIVE FIX: Forcefully hide admin pages for non-admins ---
+        # This CSS is a backup to ensure the links are never visible.
+        # It targets the links by their filename in the URL.
+        st.markdown("""
+            <style>
+                [data-testid="stSidebarNav"] ul li a[href*="User_Management"] {
+                    display: none;
+                }
+                [data-testid="stSidebarNav"] ul li a[href*="Category_Management"] {
+                    display: none;
+                }
+            </style>
+        """, unsafe_allow_html=True)
+else:
+    # If the user is logged out, show only the account pages.
+    nav_pages = [login_page, register_page]
 
 # Create and run the navigation
-pg = st.navigation(pages_to_show)
+pg = st.navigation(nav_pages)
 pg.run()
