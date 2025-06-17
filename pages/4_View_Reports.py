@@ -215,7 +215,7 @@ else:
                 
                 if available_columns_for_export:
                     export_df = original_expenses_df[available_columns_for_export].copy()
-                    btn_col1, btn_col2, btn_col3 = st.columns(3)
+                    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
                     with btn_col1:
                         csv_data = export_df.to_csv(index=False).encode('utf-8')
                         st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
