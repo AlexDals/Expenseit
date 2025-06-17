@@ -9,40 +9,17 @@ from xml.dom import minidom
 
 @st.cache_resource
 def init_connection() -> Client:
+    """Initializes and returns a Supabase client."""
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found.")
+        st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
         st.stop()
 
-# --- THIS FUNCTION IS MODIFIED ---
-def get_expenses_for_report(report_id):
-    """Fetches all expense items for a report, including the category name and GL account."""
-    supabase = init_connection()
-    try:
-        # FIX: The select statement now also retrieves gl_account from the joined table.
-        response = supabase.table('expenses').select("*, category:categories!left(name, gl_account)").eq('report_id', report_id).execute()
-        
-        expenses = response.data
-        # This loop unnests the category data more robustly
-        for expense in expenses:
-            if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category'].get('name')
-                expense['gl_account'] = expense['category'].get('gl_account') # Add gl_account
-            else:
-                expense['category_name'] = None
-                expense['gl_account'] = None
-            expense.pop('category', None) # Remove the nested dictionary
-            
-        return pd.DataFrame(expenses)
-    except Exception as e:
-        st.error(f"Error fetching expense items: {e}")
-        return pd.DataFrame()
-
-# --- All other functions below this line remain the same ---
 def fetch_all_users_for_auth():
+    """Fetches all users from the database for the authenticator."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
@@ -55,6 +32,7 @@ def fetch_all_users_for_auth():
         st.error(f"Error fetching users: {e}"); return {"usernames": {}}
 
 def register_user(username, name, email, hashed_password, role='user'):
+    """Registers a new user in the database with a specific role."""
     supabase = init_connection()
     try:
         if supabase.table('users').select('id', count='exact').eq('username', username).execute().count > 0:
@@ -65,6 +43,7 @@ def register_user(username, name, email, hashed_password, role='user'):
         st.error(f"Error during registration: {e}"); return False
 
 def get_user_role(username: str):
+    """Fetches just the role for a specific username upon login."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select('role').eq('username', username).execute()
@@ -73,6 +52,7 @@ def get_user_role(username: str):
         st.error(f"Error fetching user role: {e}"); return None
 
 def get_all_users():
+    """Fetches all user data for the management page."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, username, name, email, role, approver_id, department").execute()
@@ -81,6 +61,7 @@ def get_all_users():
         st.error(f"Error fetching all users: {e}"); return pd.DataFrame()
 
 def get_all_approvers():
+    """Fetches all users with the 'approver' OR 'admin' role."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, name").in_('role', ['approver', 'admin']).execute()
@@ -89,6 +70,7 @@ def get_all_approvers():
         st.error(f"Error fetching approvers: {e}"); return []
 
 def update_user_details(user_id, role, approver_id, department):
+    """Updates a user's role, assigned approver, and department."""
     supabase = init_connection()
     try:
         supabase.table('users').update({"role": role, "approver_id": approver_id, "department": department}).eq('id', user_id).execute()
@@ -97,6 +79,7 @@ def update_user_details(user_id, role, approver_id, department):
         st.error(f"Error updating user details: {e}"); return False
 
 def add_report(user_id, report_name, total_amount):
+    """Adds a new report header to the database."""
     supabase = init_connection()
     try:
         response = supabase.table('reports').insert({"user_id": user_id, "report_name": report_name, "submission_date": datetime.now().isoformat(), "total_amount": total_amount, "status": "Submitted"}).execute()
@@ -105,6 +88,7 @@ def add_report(user_id, report_name, total_amount):
         st.error(f"Error adding report: {e}"); return None
 
 def add_expense_item(report_id, expense_date, vendor, description, amount, currency='CAD', category_id=None, receipt_path=None, ocr_text=None, gst_amount=None, pst_amount=None, hst_amount=None, line_items=None):
+    """Adds a new expense item to a report."""
     supabase = init_connection()
     try:
         supabase.table('expenses').insert({
@@ -112,13 +96,15 @@ def add_expense_item(report_id, expense_date, vendor, description, amount, curre
             "description": description, "amount": amount, "category_id": category_id,
             "receipt_path": receipt_path, "ocr_text": ocr_text, "gst_amount": gst_amount,
             "pst_amount": pst_amount, "hst_amount": hst_amount,
-            "line_items": json.dumps(line_items) if line_items else None, "currency": currency
+            "line_items": json.dumps(line_items) if line_items else None,
+            "currency": currency
         }).execute()
         return True
     except Exception as e:
         st.error(f"Error saving an expense item: {e}"); return False
 
 def update_expense_item(expense_id, updates: dict):
+    """Updates an existing expense item with a dictionary of changes."""
     supabase = init_connection()
     try:
         supabase.table('expenses').update(updates).eq('id', expense_id).execute()
@@ -127,16 +113,41 @@ def update_expense_item(expense_id, updates: dict):
         st.error(f"Error updating expense item: {e}"); return False
 
 def get_reports_for_user(user_id):
+    """Fetches all report summaries for a specific user."""
     supabase = init_connection()
     response = supabase.table('reports').select("*, user:users!left(name)").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
+def get_expenses_for_report(report_id):
+    """Fetches all expense items for a report, including the category name and GL account."""
+    supabase = init_connection()
+    try:
+        # FIX: The select statement now also retrieves gl_account from the joined table.
+        response = supabase.table('expenses').select("*, category:categories!left(name, gl_account)").eq('report_id', report_id).execute()
+        
+        expenses = response.data
+        for expense in expenses:
+            if expense.get('category') and isinstance(expense['category'], dict):
+                expense['category_name'] = expense['category'].get('name')
+                expense['gl_account'] = expense['category'].get('gl_account')
+            else:
+                expense['category_name'] = None
+                expense['gl_account'] = None
+            expense.pop('category', None)
+            
+        return pd.DataFrame(expenses)
+    except Exception as e:
+        st.error(f"Error fetching expense items: {e}")
+        return pd.DataFrame()
+
 def get_receipt_public_url(path: str):
+    """Gets the public URL for a receipt from its storage path."""
     supabase = init_connection()
     if not path: return ""
     return supabase.storage.from_('receipts').get_public_url(path)
 
 def get_reports_for_approver(approver_id):
+    """Fetches reports for an approver based on department."""
     supabase = init_connection()
     try:
         approver_dept_response = supabase.table('users').select('department').eq('id', approver_id).maybe_single().execute()
@@ -152,6 +163,7 @@ def get_reports_for_approver(approver_id):
         st.error(f"Error fetching reports for approver: {e}"); return pd.DataFrame()
 
 def get_all_reports():
+    """Fetches all reports for admin view."""
     supabase = init_connection()
     try:
         response = supabase.table('reports').select("*, user:users!left(name)").order('submission_date', desc=True).execute()
@@ -160,6 +172,7 @@ def get_all_reports():
         st.error(f"Error fetching all reports: {e}"); return pd.DataFrame()
 
 def update_report_status(report_id, status, comment=None):
+    """Updates the status of a specific report and optionally adds a comment."""
     supabase = init_connection()
     try:
         updates = {"status": status}
@@ -170,6 +183,7 @@ def update_report_status(report_id, status, comment=None):
         st.error(f"Error updating report status: {e}"); return False
 
 def get_all_categories():
+    """Fetches all expense categories from the database."""
     supabase = init_connection()
     try:
         response = supabase.table('categories').select("id, name, gl_account").order('name', desc=False).execute()
@@ -178,6 +192,7 @@ def get_all_categories():
         st.error(f"Error fetching categories: {e}"); return []
 
 def add_category(name, gl_account):
+    """Adds a new category to the database."""
     supabase = init_connection()
     try:
         if supabase.table('categories').select('id', count='exact').eq('name', name).execute().count > 0:
@@ -188,6 +203,7 @@ def add_category(name, gl_account):
         st.error(f"Error adding category: {e}"); return False
 
 def update_category(category_id, name, gl_account):
+    """Updates an existing category's details."""
     supabase = init_connection()
     try:
         supabase.table('categories').update({"name": name, "gl_account": gl_account}).eq('id', category_id).execute()
@@ -196,6 +212,7 @@ def update_category(category_id, name, gl_account):
         st.error(f"Error updating category: {e}"); return False
 
 def delete_category(category_id):
+    """Deletes a category from the database."""
     supabase = init_connection()
     try:
         supabase.table('categories').delete().eq('id', category_id).execute()
@@ -204,6 +221,7 @@ def delete_category(category_id):
         st.error(f"Error deleting category: {e}"); return False
 
 def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
+    """Generates an XML string for a given report, exactly matching the required format."""
     def create_sub_element(parent, tag, text, attributes=None):
         element = ET.SubElement(parent, tag, attrib=attributes or {})
         element.text = str(text) if text is not None and pd.notna(text) else ""
@@ -214,4 +232,85 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
 
     record = ET.Element("Record", {"SystemDBVersion": "3676", "ExportFileFormatVersion": "1.002", "ExportDate": datetime.now().strftime("%Y-%m-%d"), "DataObjectID": "{02E10F25-EDA3-4A1C-AF1C-741067C309B1}", "AllowDataSetEvents": "0"})
     header = ET.SubElement(record, "Header", {"Table": "PurcHdr", "TableType": "1"})
-    # ... (rest of XML generation logic from the last working version) ...
+    
+    default_values_hdr = ET.SubElement(header, "DefaultValues")
+    create_sub_element(default_values_hdr, "Member", datetime.now().strftime("%-m/%-d/%Y")).set("Name", "PurcDate")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "ExchangeRate")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "ShipAmnt")
+    create_sub_element(default_values_hdr, "Member", "50").set("Name", "PurcType")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "SurchargeAmnt")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "ShipTax")
+    create_sub_element(default_values_hdr, "Member", "").set("Name", "ShipTo")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "x00198411_TransportsExchangeRate")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "x00198411_BrokeragesExchangerate")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "VirtualPaidAmnt")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "VirtualShipAmnt")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "x00198411_CustomsExchangeRate")
+    create_sub_element(default_values_hdr, "Member", "0").set("Name", "PaidAmnt")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "ExCurrencyId")
+    create_sub_element(default_values_hdr, "Member", "1").set("Name", "ExTemplId")
+
+    rows_header = ET.SubElement(header, "Rows")
+    row_header = ET.SubElement(rows_header, "Row")
+    
+    first_expense = expenses_data.iloc[0] if not expenses_data.empty else {}
+    currency = first_expense.get('currency', 'CAD') if pd.notna(first_expense.get('currency')) else 'CAD'
+
+    create_sub_element(row_header, "ExSuppId", first_expense.get('vendor', 'N/A'), {"MemberName": "SuppId"})
+    create_sub_element(row_header, "PurcDate", str(report_data.get('submission_date', ''))[:10])
+    create_sub_element(row_header, "DocNo", report_data.get('report_name', ''))
+    create_sub_element(row_header, "ExTermId", "N/A", {"MemberName": "Descr"})
+    create_sub_element(row_header, "Remarks", report_data.get('report_name', ''))
+    create_sub_element(row_header, "ExchangeRate", "1")
+    create_sub_element(row_header, "PurcFrom", first_expense.get('vendor', 'N/A'))
+    total_tax = (expenses_data['gst_amount'].sum() or 0) + (expenses_data['pst_amount'].sum() or 0) + (expenses_data['hst_amount'].sum() or 0)
+    create_sub_element(row_header, "TaxAmnt", f"{total_tax:.4f}")
+    create_sub_element(row_header, "TotAmnt", f"{report_data.get('total_amount', 0):.4f}")
+    create_sub_element(row_header, "ExCurrencyId", currency, {"MemberName": "CurrencyCode"})
+    create_sub_element(row_header, "ExPmtMethId", "Check", {"MemberName": "PmtMeth"})
+    create_sub_element(row_header, "ShipTo", "")
+    create_sub_element(row_header, "UpdatedBy", submitter_name)
+    create_sub_element(row_header, "PaidAmnt", "0")
+    create_sub_element(row_header, "PurchAmnt", f"{report_data.get('total_amount', 0):.4f}")
+    # Add other placeholder tags to match structure
+    create_sub_element(row_header, "TaxHoldbackAmnt", "0")
+    create_sub_element(row_header, "ShipAmnt", "0")
+    create_sub_element(row_header, "SurchargeAmnt", "0")
+    create_sub_element(row_header, "ShipVia", "")
+    create_sub_element(row_header, "ShipTax", "0")
+    create_sub_element(row_header, "TotHoldBackAmnt", "0")
+    create_sub_element(row_header, "PurchHoldbackAmnt", "0")
+    create_sub_element(row_header, "DetHoldBackAmnt", "0")
+    create_sub_element(row_header, "Balance", f"{report_data.get('total_amount', 0):.4f}")
+    create_sub_element(row_header, "Buyer", "")
+    create_sub_element(row_header, "CreatedBy", submitter_name)
+    create_sub_element(row_header, "ExTemplId", "Purchase Order", {"MemberName": "TmplName"})
+
+
+    details = ET.SubElement(record, "Details")
+    for _, expense_row in expenses_data.iterrows():
+        detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
+        default_values_det = ET.SubElement(detail, "DefaultValues")
+        create_sub_element(default_values_det, "Member", "0").set("Name", "TaxIncluded")
+        
+        rows_detail = ET.SubElement(detail, "Rows")
+        
+        line_items_str = expense_row.get('line_items')
+        line_items = json.loads(line_items_str) if line_items_str and isinstance(line_items_str, str) else []
+        if not line_items:
+            line_items = [{"description": expense_row.get('description'), "price": expense_row.get('amount'), "category_id": expense_row.get('category_id')}]
+
+        for item in line_items:
+            if item and item.get('price') is not None:
+                row_detail = ET.SubElement(rows_detail, "Row")
+                item_category_id = item.get('category_id')
+                gl_account = category_id_to_gl_map.get(item_category_id, "")
+                
+                create_sub_element(row_detail, "ExPurcAcctId", gl_account, {"MemberName": "GLAcctId"})
+                create_sub_element(row_detail, "Qty", "1")
+                create_sub_element(row_detail, "UnitPrice", f"{item.get('price', 0):.4f}")
+                create_sub_element(row_detail, "BaseRowTotal", f"{item.get('price', 0):.4f}")
+
+    rough_string = ET.tostring(record, 'utf-8')
+    reparsed = minidom.parseString(rough_string)
+    return reparsed.toprettyxml(indent="  ")
