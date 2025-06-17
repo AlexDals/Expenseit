@@ -126,11 +126,11 @@ def get_expenses_for_report(report_id):
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category']['name']
-                expense['category_id'] = expense['category']['id']
-                del expense['category']
+                expense['category_name'] = expense['category'].get('name')
+                expense['category_id'] = expense['category'].get('id')
             else:
                 expense['category_name'] = None
+            expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
@@ -216,7 +216,7 @@ def delete_category(category_id):
         st.error(f"Error deleting category: {e}"); return False
 
 def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str) -> str:
-    """Generates an XML string for a given report in the specified format."""
+    """Generates an XML string for a given report, exactly matching the required format."""
     def create_sub_element(parent, tag, text, attributes=None):
         element = ET.SubElement(parent, tag, attrib=attributes or {})
         element.text = str(text) if text is not None and pd.notna(text) else ""
@@ -246,7 +246,7 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
     create_sub_element(row_header, "Remarks", report_data.get('report_name', ''))
     create_sub_element(row_header, "ExchangeRate", "1")
     create_sub_element(row_header, "PurcFrom", first_expense.get('vendor', 'N/A'))
-    total_tax = expenses_data[['gst_amount', 'pst_amount', 'hst_amount']].sum().sum()
+    total_tax = (expenses_data['gst_amount'].sum() or 0) + (expenses_data['pst_amount'].sum() or 0) + (expenses_data['hst_amount'].sum() or 0)
     create_sub_element(row_header, "TaxAmnt", f"{total_tax:.4f}")
     create_sub_element(row_header, "TotAmnt", f"{report_data.get('total_amount', 0):.4f}")
     create_sub_element(row_header, "ExCurrencyId", currency, {"MemberName": "CurrencyCode"})
@@ -259,8 +259,9 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
         detail = ET.SubElement(details, "Detail", {"Table": "PurcDet", "TableType": "2"})
         default_values_det = ET.SubElement(detail, "DefaultValues")
         create_sub_element(default_values_det, "Member", "0").set("Name", "TaxIncluded")
-        
+
         rows_detail = ET.SubElement(detail, "Rows")
+        
         line_items_str = expense_row.get('line_items')
         line_items = json.loads(line_items_str) if line_items_str and isinstance(line_items_str, str) else []
         if not line_items:
@@ -271,6 +272,7 @@ def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, sub
                 row_detail = ET.SubElement(rows_detail, "Row")
                 item_category_id = item.get('category_id')
                 gl_account = category_id_to_gl_map.get(item_category_id, "")
+                
                 create_sub_element(row_detail, "ExPurcAcctId", gl_account, {"MemberName": "GLAcctId"})
                 create_sub_element(row_detail, "Qty", "1")
                 create_sub_element(row_detail, "UnitPrice", f"{item.get('price', 0):.4f}")
