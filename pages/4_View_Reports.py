@@ -4,8 +4,6 @@ import pandas as pd
 import io
 import re
 import json
-import zipfile # New import for zip files
-import os # New import for getting filenames
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -22,7 +20,6 @@ if not user_id:
     st.error("User profile not found in session. Please log in again.")
     st.stop()
 
-# --- Initialize session state for denial workflow ---
 if 'denying_report_id' not in st.session_state:
     st.session_state.denying_report_id = None
 
@@ -41,7 +38,7 @@ elif user_role == 'admin':
 if reports_df.empty:
     st.info("No reports found for your view.")
 else:
-    # --- Report Selection Dropdown ---
+    # --- Report Selection ---
     if 'user' in reports_df.columns:
         reports_df['submitter_name'] = reports_df['user'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Unknown User')
         reports_df['submitter_name'] = reports_df['submitter_name'].fillna('Unknown User')
@@ -70,7 +67,6 @@ else:
 
         # --- Combined Section for Admins/Approvers ---
         if user_role in ['admin', 'approver']:
-            # Approval Actions
             st.write(f"**Current Status:** `{selected_report_details['status']}`")
             if pd.notna(selected_report_details.get('approver_comment')):
                 st.error(f"**Reason for Denial:** {selected_report_details['approver_comment']}")
@@ -104,7 +100,7 @@ else:
             
             if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
-                st.info("You can edit values directly in the table below. A 'Save' button will appear if changes are made.")
+                st.info("You can edit values directly in the table below.")
                 
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
@@ -144,21 +140,15 @@ else:
                         with st.spinner("Saving..."):
                             edited_rows = st.session_state[editor_key]["edited_rows"]
                             all_success = True
-                            
                             for row_index, changes in edited_rows.items():
                                 expense_id = original_expenses_df.iloc[row_index]['id']
-                                
-                                # Convert category name back to ID if it was changed
                                 if "category_name" in changes:
                                     changes["category_id"] = category_map.get(changes["category_name"])
                                     del changes["category_name"]
-
                                 if not su.update_expense_item(expense_id, changes):
                                     all_success = False
-                            
                             if all_success:
-                                st.success("Changes saved successfully!")
-                                st.rerun()
+                                st.success("Changes saved successfully!"); st.rerun()
                             else:
                                 st.error("Failed to save one or more changes.")
         
@@ -179,35 +169,25 @@ else:
                     with st.expander("View Details (Line Items & Receipt)"):
                         line_items = []
                         if row.get('line_items') and isinstance(row['line_items'], str):
-                            try:
-                                line_items = json.loads(row['line_items'])
-                            except (json.JSONDecodeError, TypeError):
-                                line_items = []
+                            try: line_items = json.loads(row['line_items'])
+                            except (json.JSONDecodeError, TypeError): line_items = []
                         if line_items:
-                            st.write("**Line Items**")
-                            st.dataframe(pd.DataFrame(line_items))
-                        else:
-                            st.write("*No line items were extracted for this expense.*")
-                        
+                            st.write("**Line Items**"); st.dataframe(pd.DataFrame(line_items))
+                        else: st.write("*No line items were extracted for this expense.*")
                         if row.get('receipt_path'):
                             st.write("**Receipt File**")
                             receipt_url = su.get_receipt_public_url(row['receipt_path'])
                             if receipt_url:
                                 if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')):
                                     st.image(receipt_url)
-                                else:
-                                    st.link_button("Download Receipt File", receipt_url)
-                        else:
-                            st.write("*No receipt was uploaded for this expense.*")
+                                else: st.link_button("Download Receipt File", receipt_url)
+                        else: st.write("*No receipt was uploaded for this expense.*")
                     st.markdown("---")
-            else:
-                st.info("No expense items found for this report.")
-
+        
         # --- Export Buttons Section ---
         if not original_expenses_df.empty:
             if user_role in ['admin', 'approver']:
                 st.subheader("Export This Full Report")
-                
                 clean_report_name = re.sub(r'[^a-zA-Z0-9\s]', '', id_to_display_name_map[selected_report_id].split(' (')[0]).replace(' ', '_')
                 
                 desired_export_columns = ["expense_date", "vendor", "description", "amount", "gst_amount", "pst_amount", "hst_amount", "category_name", "gl_account"]
@@ -215,7 +195,7 @@ else:
                 
                 if available_columns_for_export:
                     export_df = original_expenses_df[available_columns_for_export].copy()
-                    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+                    btn_col1, btn_col2, btn_col3 = st.columns(3)
                     with btn_col1:
                         csv_data = export_df.to_csv(index=False).encode('utf-8')
                         st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
@@ -229,26 +209,5 @@ else:
                         submitter_name = selected_report_details.get('submitter_name', 'N/A')
                         xml_data = su.generate_report_xml(selected_report_details, original_expenses_df, submitter_name)
                         st.download_button(label="💿 Download as XML", data=xml_data, file_name=f"{clean_report_name}.xml", mime="application/xml", use_container_width=True)
-                    with btn_col4:
-                        receipt_paths = original_expenses_df['receipt_path'].dropna().tolist()
-                        if receipt_paths:
-                            # Create a zip file in memory
-                            zip_buffer = io.BytesIO()
-                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                                for path in receipt_paths:
-                                    file_bytes = su.download_file_bytes(path)
-                                    if file_bytes:
-                                        # Get the original filename from the path
-                                        file_name = os.path.basename(path)
-                                        zipf.writestr(file_name, file_bytes)
-                            
-                            zip_buffer.seek(0)
-                            st.download_button(
-                                label="🧾 Download Receipts (.zip)",
-                                data=zip_buffer,
-                                file_name=f"{clean_report_name}_receipts.zip",
-                                mime="application/zip",
-                                use_container_width=True
-                            )
-                else:
-                    st.warning("No data with exportable columns found for this report.")
+        else:
+            st.info("No expense items to display or export for this report.")
