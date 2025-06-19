@@ -4,6 +4,8 @@ import pandas as pd
 import io
 import re
 import json
+import zipfile
+import os
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
@@ -38,7 +40,7 @@ elif user_role == 'admin':
 if reports_df.empty:
     st.info("No reports found for your view.")
 else:
-    # --- Report Selection ---
+    # --- Report Selection Dropdown ---
     if 'user' in reports_df.columns:
         reports_df['submitter_name'] = reports_df['user'].apply(lambda x: x.get('name') if isinstance(x, dict) else 'Unknown User')
         reports_df['submitter_name'] = reports_df['submitter_name'].fillna('Unknown User')
@@ -100,7 +102,7 @@ else:
             
             if not original_expenses_df.empty:
                 st.subheader("Edit Expense Details")
-                st.info("You can edit values directly in the table below.")
+                st.info("You can edit values directly in the table below. A 'Save' button will appear if changes are made.")
                 
                 expenses_to_edit = original_expenses_df.copy()
                 categories = su.get_all_categories()
@@ -117,23 +119,7 @@ else:
                 expenses_to_edit['category_name'] = expenses_to_edit['category_name'].apply(lambda x: x if x in valid_category_options else "")
 
                 editor_key = f"editor_{selected_report_id}"
-                edited_expenses_df = st.data_editor(
-                    expenses_to_edit,
-                    key=editor_key,
-                    num_rows="dynamic",
-                    hide_index=True,
-                    column_config={
-                        "id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, 
-                        "line_items": None, "created_at": None, "category_id": None, "gl_account": None,
-                        "expense_date": st.column_config.DateColumn("Date", required=True),
-                        "vendor": "Vendor", "description": "Purpose",
-                        "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True),
-                        "category_name": st.column_config.SelectboxColumn("Category", options=category_names, required=False),
-                        "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"),
-                        "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"),
-                        "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f"),
-                    }
-                )
+                edited_expenses_df = st.data_editor(expenses_to_edit, key=editor_key, num_rows="dynamic", hide_index=True, column_config={"id": None, "report_id": None, "user_id": None, "receipt_path": None, "ocr_text": None, "line_items": None, "created_at": None, "category_id": None, "gl_account": None, "expense_date": st.column_config.DateColumn("Date", required=True), "vendor": "Vendor", "description": "Purpose", "amount": st.column_config.NumberColumn("Total", format="$%.2f", required=True), "category_name": st.column_config.SelectboxColumn("Category", options=category_names, required=False), "gst_amount": st.column_config.NumberColumn("GST/TPS", format="$%.2f"), "pst_amount": st.column_config.NumberColumn("PST/QST", format="$%.2f"), "hst_amount": st.column_config.NumberColumn("HST/TVH", format="$%.2f")})
                 
                 if st.session_state[editor_key].get("edited_rows"):
                     if st.button("Save Expense Changes"):
@@ -143,8 +129,7 @@ else:
                             for row_index, changes in edited_rows.items():
                                 expense_id = original_expenses_df.iloc[row_index]['id']
                                 if "category_name" in changes:
-                                    changes["category_id"] = category_map.get(changes["category_name"])
-                                    del changes["category_name"]
+                                    changes["category_id"] = category_map.get(changes["category_name"]); del changes["category_name"]
                                 if not su.update_expense_item(expense_id, changes):
                                     all_success = False
                             if all_success:
@@ -178,8 +163,7 @@ else:
                             st.write("**Receipt File**")
                             receipt_url = su.get_receipt_public_url(row['receipt_path'])
                             if receipt_url:
-                                if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')):
-                                    st.image(receipt_url)
+                                if row['receipt_path'].lower().endswith(('.png', '.jpg', '.jpeg')): st.image(receipt_url)
                                 else: st.link_button("Download Receipt File", receipt_url)
                         else: st.write("*No receipt was uploaded for this expense.*")
                     st.markdown("---")
@@ -195,7 +179,7 @@ else:
                 
                 if available_columns_for_export:
                     export_df = original_expenses_df[available_columns_for_export].copy()
-                    btn_col1, btn_col2, btn_col3 = st.columns(3)
+                    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4) # Changed to 4 columns
                     with btn_col1:
                         csv_data = export_df.to_csv(index=False).encode('utf-8')
                         st.download_button(label="📥 Download as CSV", data=csv_data, file_name=f"{clean_report_name}.csv", mime="text/csv", use_container_width=True)
@@ -209,5 +193,24 @@ else:
                         submitter_name = selected_report_details.get('submitter_name', 'N/A')
                         xml_data = su.generate_report_xml(selected_report_details, original_expenses_df, submitter_name)
                         st.download_button(label="💿 Download as XML", data=xml_data, file_name=f"{clean_report_name}.xml", mime="application/xml", use_container_width=True)
-        else:
+                    with btn_col4:
+                        receipt_paths = original_expenses_df['receipt_path'].dropna().tolist()
+                        if receipt_paths:
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                                for path in receipt_paths:
+                                    file_bytes = su.download_file_bytes(path)
+                                    if file_bytes:
+                                        file_name = os.path.basename(path)
+                                        zipf.writestr(file_name, file_bytes)
+                            zip_buffer.seek(0)
+                            st.download_button(
+                                label="🧾 Download Receipts (.zip)",
+                                data=zip_buffer,
+                                file_name=f"{clean_report_name}_receipts.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+
+        if original_expenses_df.empty:
             st.info("No expense items to display or export for this report.")
