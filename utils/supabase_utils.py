@@ -9,33 +9,27 @@ from xml.dom import minidom
 
 @st.cache_resource
 def init_connection() -> Client:
-    """Initializes and returns a Supabase client."""
     try:
         url = st.secrets["supabase"]["url"]
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found. Please add your secrets in the Streamlit Cloud dashboard.")
+        st.error("Supabase credentials not found.")
         st.stop()
 
 def fetch_all_users_for_auth():
-    """Fetches all users from the database for the authenticator, including ID and role."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, username, email, name, hashed_password, role").execute()
         users_data = response.data
         credentials = {"usernames": {}}
         for user in users_data:
-            credentials["usernames"][user["username"]] = {
-                "id": user["id"], "email": user["email"], "name": user["name"], 
-                "password": user["hashed_password"], "role": user["role"]
-            }
+            credentials["usernames"][user["username"]] = {"id": user["id"], "email": user["email"], "name": user["name"], "password": user["hashed_password"], "role": user["role"]}
         return credentials
     except Exception as e:
         st.error(f"Error fetching users: {e}"); return {"usernames": {}}
 
 def register_user(username, name, email, hashed_password, role='user'):
-    """Registers a new user in the database with a specific role."""
     supabase = init_connection()
     try:
         if supabase.table('users').select('id', count='exact').eq('username', username).execute().count > 0:
@@ -46,7 +40,6 @@ def register_user(username, name, email, hashed_password, role='user'):
         st.error(f"Error during registration: {e}"); return False
 
 def get_user_role(username: str):
-    """Fetches just the role for a specific username upon login."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select('role').eq('username', username).execute()
@@ -55,12 +48,9 @@ def get_user_role(username: str):
         st.error(f"Error fetching user role: {e}"); return None
 
 def get_all_users():
-    """Fetches all user data, joining the category name for their default category."""
     supabase = init_connection()
     try:
-        # Selects the new default_category_id and joins to get the category name
         response = supabase.table('users').select("id, username, name, email, role, approver_id, default_category:categories(id, name)").execute()
-        
         users = response.data
         for user in users:
             if user.get('default_category') and isinstance(user['default_category'], dict):
@@ -69,15 +59,12 @@ def get_all_users():
             else:
                 user['default_category_name'] = None
                 user['default_category_id'] = None
-            user.pop('default_category', None) # Clean up the nested object
-
+            user.pop('default_category', None)
         return pd.DataFrame(users)
     except Exception as e:
-        st.error(f"Error fetching all users: {e}")
-        return pd.DataFrame()
+        st.error(f"Error fetching all users: {e}"); return pd.DataFrame()
 
 def get_all_approvers():
-    """Fetches all users with the 'approver' OR 'admin' role."""
     supabase = init_connection()
     try:
         response = supabase.table('users').select("id, name").in_('role', ['approver', 'admin']).execute()
@@ -86,20 +73,18 @@ def get_all_approvers():
         st.error(f"Error fetching approvers: {e}"); return []
 
 def update_user_details(user_id, role, approver_id, default_category_id):
-    """Updates a user's role, assigned approver, and default category."""
     supabase = init_connection()
     try:
         supabase.table('users').update({
             "role": role,
             "approver_id": approver_id,
-            "default_category_id": default_category_id # Use new category ID field
+            "default_category_id": default_category_id
         }).eq('id', user_id).execute()
         return True
     except Exception as e:
         st.error(f"Error updating user details: {e}"); return False
 
 def add_report(user_id, report_name, total_amount):
-    """Adds a new report header to the database."""
     supabase = init_connection()
     try:
         response = supabase.table('reports').insert({"user_id": user_id, "report_name": report_name, "submission_date": datetime.now().isoformat(), "total_amount": total_amount, "status": "Submitted"}).execute()
@@ -108,7 +93,6 @@ def add_report(user_id, report_name, total_amount):
         st.error(f"Error adding report: {e}"); return None
 
 def add_expense_item(report_id, expense_date, vendor, description, amount, currency='CAD', category_id=None, receipt_path=None, ocr_text=None, gst_amount=None, pst_amount=None, hst_amount=None, line_items=None):
-    """Adds a new expense item to a report."""
     supabase = init_connection()
     try:
         supabase.table('expenses').insert({
@@ -124,7 +108,6 @@ def add_expense_item(report_id, expense_date, vendor, description, amount, curre
         st.error(f"Error saving an expense item: {e}"); return False
 
 def update_expense_item(expense_id, updates: dict):
-    """Updates an existing expense item with a dictionary of changes."""
     supabase = init_connection()
     try:
         supabase.table('expenses').update(updates).eq('id', expense_id).execute()
@@ -133,37 +116,31 @@ def update_expense_item(expense_id, updates: dict):
         st.error(f"Error updating expense item: {e}"); return False
 
 def get_reports_for_user(user_id):
-    """Fetches all report summaries for a specific user."""
     supabase = init_connection()
     response = supabase.table('reports').select("*, user:users!left(name)").eq('user_id', user_id).order('submission_date', desc=True).execute()
     return pd.DataFrame(response.data)
 
 def get_expenses_for_report(report_id):
-    """Fetches all expense items for a report, including the category name."""
     supabase = init_connection()
     try:
-        response = supabase.table('expenses').select("*, category:categories!left(id, name, gl_account)").eq('report_id', report_id).execute()
+        response = supabase.table('expenses').select("*, category:categories!left(name, gl_account)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category'].get('name')
-                expense['gl_account'] = expense['category'].get('gl_account')
+                expense['category_name'] = expense['category'].get('name'); expense['gl_account'] = expense['category'].get('gl_account')
             else:
-                expense['category_name'] = None
-                expense['gl_account'] = None
+                expense['category_name'] = None; expense['gl_account'] = None
             expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
         st.error(f"Error fetching expense items: {e}"); return pd.DataFrame()
 
 def get_receipt_public_url(path: str):
-    """Gets the public URL for a receipt from its storage path."""
     supabase = init_connection()
     if not path: return ""
     return supabase.storage.from_('receipts').get_public_url(path)
 
 def get_reports_for_approver(approver_id):
-    """Fetches reports for an approver based on their default category."""
     supabase = init_connection()
     try:
         approver_response = supabase.table('users').select('default_category_id').eq('id', approver_id).maybe_single().execute()
@@ -179,7 +156,6 @@ def get_reports_for_approver(approver_id):
         st.error(f"Error fetching reports for approver: {e}"); return pd.DataFrame()
 
 def get_all_reports():
-    """Fetches all reports for admin view."""
     supabase = init_connection()
     try:
         response = supabase.table('reports').select("*, user:users!left(name)").order('submission_date', desc=True).execute()
@@ -188,7 +164,6 @@ def get_all_reports():
         st.error(f"Error fetching all reports: {e}"); return pd.DataFrame()
 
 def update_report_status(report_id, status, comment=None):
-    """Updates the status of a specific report and optionally adds a comment."""
     supabase = init_connection()
     try:
         updates = {"status": status}
@@ -199,7 +174,6 @@ def update_report_status(report_id, status, comment=None):
         st.error(f"Error updating report status: {e}"); return False
 
 def get_all_categories():
-    """Fetches all expense categories from the database."""
     supabase = init_connection()
     try:
         response = supabase.table('categories').select("id, name, gl_account").order('name', desc=False).execute()
@@ -208,7 +182,6 @@ def get_all_categories():
         st.error(f"Error fetching categories: {e}"); return []
 
 def add_category(name, gl_account):
-    """Adds a new category to the database."""
     supabase = init_connection()
     try:
         if supabase.table('categories').select('id', count='exact').eq('name', name).execute().count > 0:
@@ -219,7 +192,6 @@ def add_category(name, gl_account):
         st.error(f"Error adding category: {e}"); return False
 
 def update_category(category_id, name, gl_account):
-    """Updates an existing category's details."""
     supabase = init_connection()
     try:
         supabase.table('categories').update({"name": name, "gl_account": gl_account}).eq('id', category_id).execute()
@@ -228,7 +200,6 @@ def update_category(category_id, name, gl_account):
         st.error(f"Error updating category: {e}"); return False
 
 def delete_category(category_id):
-    """Deletes a category from the database."""
     supabase = init_connection()
     try:
         supabase.table('categories').delete().eq('id', category_id).execute()
@@ -237,9 +208,5 @@ def delete_category(category_id):
         st.error(f"Error deleting category: {e}"); return False
 
 def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
-    """Generates an XML string for a given report, exactly matching the required format."""
-    def create_sub_element(parent, tag, text, attributes=None):
-        element = ET.SubElement(parent, tag, attrib=attributes or {})
-        element.text = str(text) if text is not None and pd.notna(text) else ""
-        return element
-    # ... (rest of the XML generation function) ...
+    # ... (XML generation logic) ...
+    pass
