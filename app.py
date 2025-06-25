@@ -34,25 +34,27 @@ is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
 # Define all pages
-login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=not is_logged_in)
+login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
 dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
 view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
-# --- FIX: Define the Edit User page but do not add it to a visible list below ---
+# Define the hidden Edit User page so st.page_link can find it
 edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User")
-
 
 # Build the navigation list based on login status and role.
 if is_logged_in:
+    # Build the list for logged-in users
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if user_role == 'admin':
         nav_pages.append(user_management_page)
         nav_pages.append(category_management_page)
-        # We no longer add the edit_user_page here, so it stays hidden
+        # Add the hidden page to the navigation graph for admins
+        nav_pages.append(edit_user_page)
 else:
+    # Build the list for logged-out users
     nav_pages = [login_page, register_page]
 
 # Create and run the navigation
