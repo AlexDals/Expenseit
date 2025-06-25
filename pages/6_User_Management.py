@@ -22,6 +22,7 @@ with st.expander("➕ Create a New User"):
         new_role = st.selectbox("Assign Role*", options=["user", "approver", "admin"])
         
         create_submitted = st.form_submit_button("Create User")
+
         if create_submitted:
             if not all([new_email, new_name, new_username, new_password, new_role]):
                 st.error("Please fill out all fields to create a user.")
@@ -47,11 +48,11 @@ approvers = su.get_all_approvers()
 categories = su.get_all_categories()
 
 approver_map = {approver['id']: approver['name'] for approver in approvers}
-approver_options = [""] + list(approver_map.values()) # "" represents None
+approver_options = [""] + list(approver_map.values())
 approver_name_to_id = {v: k for k, v in approver_map.items()}
 
 category_map = {cat['id']: cat['name'] for cat in categories}
-category_options = [""] + list(category_map.values()) # "" represents None
+category_options = [""] + list(category_map.values())
 category_name_to_id = {v: k for k, v in category_map.items()}
 
 if all_users_df.empty:
@@ -62,11 +63,12 @@ if all_users_df.empty:
 all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
 all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
+
 # --- The Data Editor ---
 if 'edited_users' not in st.session_state:
     st.session_state.edited_users = all_users_df.to_dict('records')
 
-st.session_state.edited_users = st.data_editor(
+edited_data = st.data_editor(
     pd.DataFrame(st.session_state.edited_users),
     column_config={
         "id": None, "approver_id": None, "default_category_id": None, "email": None,
@@ -75,11 +77,12 @@ st.session_state.edited_users = st.data_editor(
         "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
         "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_options)
     },
+    disabled=["username", "name", "email"],
     hide_index=True,
     key="user_editor"
 )
+st.session_state.edited_users = edited_data
 
-# --- Save Changes to Database ---
 if st.button("Save All User Changes"):
     with st.spinner("Saving changes..."):
         all_success = True
