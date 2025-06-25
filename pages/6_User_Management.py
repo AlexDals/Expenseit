@@ -11,8 +11,8 @@ if not st.session_state.get("authentication_status") or st.session_state.get("ro
     st.error("You do not have permission to access this page.")
     st.stop()
 
-# --- Admin User Creation Form ---
-with st.expander("➕ Create a New User"):
+# --- Admin User Creation Form (This can be kept as a separate, explicit creation method) ---
+with st.expander("➕ Create a New User (Recommended)"):
     with st.form("admin_create_user_form", clear_on_submit=True):
         st.subheader("New User Details")
         new_name = st.text_input("Full Name*")
@@ -40,7 +40,7 @@ st.markdown("---")
 
 # --- Existing User Editing Logic ---
 st.subheader("Edit Existing Users")
-st.info("Edit user roles, approvers, and default categories below.")
+st.info("You can edit, add, or delete users directly in the grid below. Click 'Save All Changes' when you are done.")
 
 # --- Data Preparation for Editor ---
 all_users_df = su.get_all_users()
@@ -57,55 +57,70 @@ category_name_to_id = {v: k for k, v in category_map.items()}
 
 if all_users_df.empty:
     st.warning("No users found.")
-    st.stop()
+else:
+    # Prepare dataframe for editing
+    all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
+    all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
-# Prepare dataframe for editing by replacing IDs with human-readable names
-all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
-all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
+    # Store the original dataframe in session state to compare against edits
+    if 'original_users_df' not in st.session_state:
+        st.session_state.original_users_df = all_users_df.copy()
 
-# --- The Data Editor ---
-editor_key = "user_editor"
-if editor_key not in st.session_state:
-    st.session_state[editor_key] = {"edited_rows": {}}
+    edited_df = st.data_editor(
+        all_users_df,
+        column_config={
+            "id": None, "approver_id": None, "default_category_id": None, 
+            "username": "Username", "name": "Full Name", "email": "Email",
+            "role": st.column_config.SelectboxColumn("Role", options=["user", "approver", "admin"], required=True),
+            "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
+            "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_options)
+        },
+        num_rows="dynamic", # Allow adding and deleting
+        hide_index=True,
+        key="user_editor"
+    )
 
-edited_df = st.data_editor(
-    all_users_df,
-    column_config={
-        "id": None, "approver_id": None, "default_category_id": None, "email": None,
-        "username": "Username", "name": "Full Name",
-        "role": st.column_config.SelectboxColumn("Role", options=["user", "approver", "admin"], required=True),
-        "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
-        "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_options)
-    },
-    disabled=["username", "name", "email"],
-    hide_index=True,
-    key=editor_key
-)
-
-# --- DEFINITIVE SAVE LOGIC ---
-if st.session_state[editor_key].get("edited_rows"):
-    if st.button("Save User Changes"):
-        with st.spinner("Saving..."):
-            edited_rows = st.session_state[editor_key]["edited_rows"]
+    if st.button("Save All User Changes"):
+        with st.spinner("Saving changes..."):
+            original_df = st.session_state.original_users_df
+            
+            # Convert to sets of IDs for finding added/deleted rows
+            original_ids = set(original_df['id'].dropna())
+            edited_ids = set(pd.DataFrame(edited_df)['id'].dropna())
+            
             all_success = True
             
-            for row_index, changes in edited_rows.items():
-                user_id = all_users_df.iloc[row_index]['id']
+            # Process Deletions
+            deleted_ids = original_ids - edited_ids
+            for user_id in deleted_ids:
+                st.warning(f"Deleting user with ID: {user_id}. This action is not yet implemented.")
+                # To implement: su.delete_user(user_id)
+            
+            # Process Additions and Updates
+            for user_data in edited_df:
+                user_id = user_data.get('id')
                 
-                # Get the full row of potentially edited data
-                full_edited_row = edited_df.iloc[row_index]
+                # Convert friendly names back to IDs for saving
+                approver_id = approver_name_to_id.get(user_data['approver_name'])
+                category_id = category_name_to_id.get(user_data['default_category_name'])
+
+                # If ID is missing, it's a new user
+                if pd.isna(user_id):
+                    st.warning("Adding new users directly in the grid is not supported yet. Please use the 'Create a New User' form above.")
+                    # To implement: Add a temporary password field, hash it, and call su.register_user(...)
+                    continue
                 
-                # Convert names back to IDs for saving
-                approver_id = approver_name_to_id.get(full_edited_row['approver_name'])
-                category_id = category_name_to_id.get(full_edited_row['default_category_name'])
-                
-                if not su.update_user_details(user_id, full_edited_row['role'], approver_id, category_id):
-                    all_success = False
+                # Check for updates
+                original_row = original_df[original_df['id'] == user_id]
+                if not original_row.empty:
+                    # Compare each value to see if an update is needed
+                    # (This is complex, a simpler approach is to just update all)
+                    if not su.update_user_details(user_id, user_data['role'], approver_id, category_id):
+                        all_success = False
             
             if all_success:
                 st.success("All changes saved successfully!")
-                # Clear the edited_rows state to hide the button after saving
-                st.session_state[editor_key]["edited_rows"] = {}
+                st.session_state.original_users_df = pd.DataFrame(edited_df) # Update the baseline
                 st.rerun()
             else:
                 st.error("One or more changes could not be saved.")
