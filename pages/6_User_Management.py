@@ -46,5 +46,9 @@ for index, user in all_users_df.iterrows():
             st.write(f"**{user['name']}** (`{user['username']}`)")
             st.caption(f"Role: `{user['role']}`")
         with col2:
-            # This is the correct way to link to a page that exists in the navigation graph
-            st.page_link("pages/8_Edit_User.py", label="Edit ✏️", use_container_width=True, query_params={"user_id": user['id']})
+            # --- DEFINITIVE FIX: Manually construct the URL with query parameters ---
+            st.page_link(
+                f"pages/8_Edit_User.py?user_id={user['id']}", 
+                label="Edit ✏️",
+                use_container_width=True
+            )
