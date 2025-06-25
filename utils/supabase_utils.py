@@ -75,21 +75,14 @@ def get_all_approvers():
     except Exception as e:
         st.error(f"Error fetching approvers: {e}"); return []
 
-# --- THIS FUNCTION IS MODIFIED for robustness ---
 def update_user_details(user_id, role, approver_id, default_category_id):
-    """Updates a user's role, approver, and default category."""
     supabase = init_connection()
     try:
-        # Prepare the dictionary of updates
-        update_data = {
+        supabase.table('users').update({
             "role": role,
             "approver_id": approver_id,
             "default_category_id": default_category_id
-        }
-        # Filter out any None values so Supabase can handle them correctly
-        update_data = {k: v for k, v in update_data.items() if v is not None}
-
-        supabase.table('users').update(update_data).eq('id', user_id).execute()
+        }).eq('id', user_id).execute()
         return True
     except Exception as e:
         st.error(f"Error updating user details: {e}"); return False
