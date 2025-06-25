@@ -22,7 +22,6 @@ with st.expander("➕ Create a New User"):
         new_role = st.selectbox("Assign Role*", options=["user", "approver", "admin"])
         
         create_submitted = st.form_submit_button("Create User")
-
         if create_submitted:
             if not all([new_email, new_name, new_username, new_password, new_role]):
                 st.error("Please fill out all fields to create a user.")
@@ -40,69 +39,62 @@ st.markdown("---")
 
 # --- Existing User Editing Logic ---
 st.subheader("Edit Existing Users")
-st.info("Edit user roles, approvers, and default categories below. Changes are saved automatically.")
+st.info("Edit user roles, approvers, and default categories below. Changes are saved automatically as you edit.")
 
+# --- Data Preparation for Editor ---
 all_users_df = su.get_all_users()
 approvers = su.get_all_approvers()
 categories = su.get_all_categories()
 
-approver_dict = {approver['name']: approver['id'] for approver in approvers}
-approver_names = ["None"] + list(approver_dict.keys())
+approver_map = {approver['id']: approver['name'] for approver in approvers}
+approver_options = [""] + list(approver_map.values()) # "" represents None
+approver_name_to_id = {v: k for k, v in approver_map.items()}
 
-category_dict = {cat['name']: cat['id'] for cat in categories}
-category_names = ["None"] + list(category_dict.keys())
-
+category_map = {cat['id']: cat['name'] for cat in categories}
+category_options = [""] + list(category_map.values()) # "" represents None
+category_name_to_id = {v: k for k, v in category_map.items()}
 
 if all_users_df.empty:
     st.warning("No users found.")
     st.stop()
 
-# Prepare dataframe for editing
-id_to_name_map = {v: k for k, v in approver_dict.items()}
-all_users_df['approver_name'] = all_users_df['approver_id'].map(id_to_name_map).fillna("None")
-all_users_df['default_category_name'] = all_users_df['default_category_name'].fillna("None")
+# Prepare dataframe for editing by replacing IDs with human-readable names
+all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
+all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
+# --- The Data Editor ---
+if 'edited_users' not in st.session_state:
+    st.session_state.edited_users = all_users_df.to_dict('records')
 
-edited_df = st.data_editor(
-    all_users_df,
+st.session_state.edited_users = st.data_editor(
+    pd.DataFrame(st.session_state.edited_users),
     column_config={
-        "id": None, "approver_id": None, "default_category_id": None,
+        "id": None, "approver_id": None, "default_category_id": None, "email": None,
+        "username": "Username", "name": "Full Name",
         "role": st.column_config.SelectboxColumn("Role", options=["user", "approver", "admin"], required=True),
-        "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_names),
-        "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_names)
+        "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
+        "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_options)
     },
-    disabled=["username", "name", "email"], # Make these fields read-only
     hide_index=True,
     key="user_editor"
 )
 
 # --- Save Changes to Database ---
-# A button is no longer needed, data_editor saves changes on each edit.
-# To make this robust, we find the row that changed.
-if 'last_edited_df' not in st.session_state:
-    st.session_state.last_edited_df = all_users_df
-
-if not pd.DataFrame(edited_df).equals(st.session_state.last_edited_df):
-    # Find the changed rows by comparing the data editor's state with the last known state
-    comparison_df = st.session_state.last_edited_df.merge(edited_df, on='id', how='outer', indicator=True)
-    changed_rows = comparison_df[comparison_df['_merge'] == 'right_only']
-
-    if not changed_rows.empty:
-        for index, row in changed_rows.iterrows():
-            user_id = row['id']
-            new_approver_id = approver_dict.get(row['approver_name_y'])
-            new_category_id = category_dict.get(row['default_category_name_y'])
+if st.button("Save All User Changes"):
+    with st.spinner("Saving changes..."):
+        all_success = True
+        for user_data in st.session_state.edited_users:
+            user_id = user_data['id']
+            # Convert names back to IDs for saving
+            approver_id = approver_name_to_id.get(user_data['approver_name'])
+            category_id = category_name_to_id.get(user_data['default_category_name'])
             
-            su.update_user_details(
-                user_id,
-                row['role_y'],
-                new_approver_id,
-                new_category_id
-            )
-        st.success("User details updated!")
-        # Update the session state and rerun
-        st.session_state.last_edited_df = edited_df
-        st.rerun()
-
-# Update the baseline state after the initial draw
-st.session_state.last_edited_df = edited_df
+            # Call the updated details function
+            if not su.update_user_details(user_id, user_data['role'], approver_id, category_id):
+                all_success = False
+        
+        if all_success:
+            st.success("All changes saved successfully!")
+            st.rerun()
+        else:
+            st.error("One or more changes could not be saved.")
