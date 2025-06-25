@@ -32,8 +32,11 @@ def fetch_all_users_for_auth():
 def register_user(username, name, email, hashed_password, role='user'):
     supabase = init_connection()
     try:
+        if not all([username, name, email, hashed_password, role]):
+            st.error("All fields are required for registration.")
+            return False
         if supabase.table('users').select('id', count='exact').eq('username', username).execute().count > 0:
-            st.error("Username already taken."); return False
+            st.error(f"Username '{username}' already taken."); return False
         supabase.table('users').insert({"username": username, "name": name, "email": email, "hashed_password": hashed_password, "role": role}).execute()
         return True
     except Exception as e:
