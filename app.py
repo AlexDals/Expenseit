@@ -2,8 +2,10 @@ import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
+# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
+# --- USER AUTHENTICATION SETUP ---
 if 'authenticator' not in st.session_state:
     try:
         user_credentials = su.fetch_all_users_for_auth()
@@ -21,6 +23,7 @@ if 'authenticator' not in st.session_state:
         st.error(f"An error occurred during authentication setup: {e}")
         st.stop()
 
+# --- ROLE & ID CHECK AFTER LOGIN ---
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -30,6 +33,7 @@ if st.session_state.get("authentication_status"):
             st.session_state["role"] = user_details.get("role")
             st.session_state["user_id"] = user_details.get("id")
 
+# --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
@@ -41,20 +45,19 @@ view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", ico
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
-# Define the hidden Edit User page so st.page_link can find it
+# --- FIX: Define the hidden Edit User page so st.page_link can find it ---
 edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User")
+
 
 # Build the navigation list based on login status and role.
 if is_logged_in:
-    # Build the list for logged-in users
     nav_pages = [dashboard_page, new_report_page, view_reports_page]
     if user_role == 'admin':
         nav_pages.append(user_management_page)
         nav_pages.append(category_management_page)
-        # Add the hidden page to the navigation graph for admins
+        # Add the hidden page to the navigation graph for admins, but it won't be in the sidebar
         nav_pages.append(edit_user_page)
 else:
-    # Build the list for logged-out users
     nav_pages = [login_page, register_page]
 
 # Create and run the navigation
