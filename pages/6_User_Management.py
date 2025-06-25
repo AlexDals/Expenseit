@@ -65,6 +65,10 @@ all_users_df['default_category_name'] = all_users_df['default_category_id'].map(
 
 # --- The Data Editor ---
 editor_key = "user_editor"
+# Store original df in session state if it's not there
+if 'original_users_df' not in st.session_state:
+    st.session_state.original_users_df = all_users_df.copy()
+
 edited_df = st.data_editor(
     all_users_df,
     column_config={
@@ -85,20 +89,25 @@ edited_df = st.data_editor(
 if st.button("Save All User Changes"):
     with st.spinner("Saving changes..."):
         editor_state = st.session_state[editor_key]
+        original_df = st.session_state.original_users_df
         all_success = True
         
         # 1. Process Deletions
         for row_index in editor_state.get("deleted_rows", []):
-            user_id_to_delete = all_users_df.iloc[row_index]['id']
+            user_id_to_delete = original_df.iloc[row_index]['id']
             if not su.delete_user(user_id_to_delete):
                 all_success = False
         
         # 2. Process Edits
         for row_index, changes in editor_state.get("edited_rows", {}).items():
-            user_id_to_update = edited_df.iloc[row_index]['id']
+            user_id_to_update = original_df.iloc[row_index]['id']
+            
+            # Get the full state of the edited row from the `edited_df` variable
             full_edited_row = edited_df.iloc[row_index]
+            
             approver_id = approver_name_to_id.get(full_edited_row['approver_name'])
             category_id = category_name_to_id.get(full_edited_row['default_category_name'])
+            
             if not su.update_user_details(user_id_to_update, full_edited_row['role'], approver_id, category_id):
                 all_success = False
 
@@ -109,6 +118,8 @@ if st.button("Save All User Changes"):
         
         if all_success:
             st.success("All changes saved successfully!")
+            # Reset the original dataframe state to the new state
+            st.session_state.original_users_df = pd.DataFrame(edited_df)
             st.rerun()
         else:
             st.error("One or more changes could not be saved. Please review warnings and try again.")
