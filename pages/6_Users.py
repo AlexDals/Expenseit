@@ -1,39 +1,29 @@
 # File: pages/6_Users.py
 
-import os
-import sys
-
-# ─ Ensure project root is on Python path ────────────────
-_this_dir = os.path.dirname(__file__)
-_project_root = os.path.abspath(os.path.join(_this_dir, ".."))
-if _project_root not in sys.path:
-    sys.path.insert(0, _project_root)
-
 import streamlit as st
-from utils.db_utils import get_all_users  # now resolvable
-
-# Initialize session_state key if missing
-st.session_state.setdefault("selected_user_id", None)
+from utils.db_utils import get_all_users
 
 st.set_page_config(page_title="Users", layout="wide")
 st.title("User Management")
 
-# Fetch users
-all_users = get_all_users()  # should return list[dict] or DataFrame
-if hasattr(all_users, "to_dict"):
-    all_users = all_users.to_dict(orient="records")
+# Ensure the session key exists
+st.session_state.setdefault("selected_user_id", None)
 
-if not all_users:
+# Fetch users (list of dicts or a DataFrame)
+users = get_all_users()
+if hasattr(users, "to_dict"):
+    users = users.to_dict(orient="records")
+
+if not users:
     st.info("No users found.")
 else:
-    for user in all_users:
+    for u in users:
         col1, col2 = st.columns([4, 1])
         if col1.button(
-            f"✏️ {user['name']} (`{user['username']}`)",
-            key=f"edit_{user['id']}",
+            f"✏️ {u['name']} (`{u['username']}`)",
+            key=f"edit_{u['id']}",
             use_container_width=True,
         ):
-            st.session_state.selected_user_id = user["id"]
+            st.session_state.selected_user_id = u["id"]
             st.switch_page("pages/8_Edit_User.py")
-
-        col2.markdown(f"**Role:** `{user.get('role','—')}`")
+        col2.markdown(f"**Role:** `{u.get('role','—')}`")
