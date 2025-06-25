@@ -2,10 +2,8 @@ import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
-# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
-# --- USER AUTHENTICATION SETUP ---
 if 'authenticator' not in st.session_state:
     try:
         user_credentials = su.fetch_all_users_for_auth()
@@ -23,7 +21,6 @@ if 'authenticator' not in st.session_state:
         st.error(f"An error occurred during authentication setup: {e}")
         st.stop()
 
-# --- ROLE & ID CHECK AFTER LOGIN ---
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -33,7 +30,6 @@ if st.session_state.get("authentication_status"):
             st.session_state["role"] = user_details.get("role")
             st.session_state["user_id"] = user_details.get("id")
 
-# --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
@@ -45,7 +41,7 @@ view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", ico
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
 category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
-# Define the Edit User page, but it will only be added to the navigation graph if the user is an admin
+# Define the Edit User page, but it will only be added to the navigation graph for admins
 edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User")
 
 # Build the navigation dictionary based on role
