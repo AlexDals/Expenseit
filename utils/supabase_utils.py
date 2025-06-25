@@ -97,7 +97,6 @@ def delete_user(user_id):
         st.error(f"Error deleting user: {e}")
         return False
 
-
 def add_report(user_id, report_name, total_amount):
     supabase = init_connection()
     try:
@@ -137,13 +136,15 @@ def get_reports_for_user(user_id):
 def get_expenses_for_report(report_id):
     supabase = init_connection()
     try:
-        response = supabase.table('expenses').select("*, category:categories!left(name, gl_account)").eq('report_id', report_id).execute()
+        response = supabase.table('expenses').select("*, category:categories!left(id, name, gl_account)").eq('report_id', report_id).execute()
         expenses = response.data
         for expense in expenses:
             if expense.get('category') and isinstance(expense['category'], dict):
-                expense['category_name'] = expense['category'].get('name'); expense['gl_account'] = expense['category'].get('gl_account')
+                expense['category_name'] = expense['category'].get('name')
+                expense['gl_account'] = expense['category'].get('gl_account')
             else:
-                expense['category_name'] = None; expense['gl_account'] = None
+                expense['category_name'] = None
+                expense['gl_account'] = None
             expense.pop('category', None)
         return pd.DataFrame(expenses)
     except Exception as e:
@@ -222,5 +223,8 @@ def delete_category(category_id):
         st.error(f"Error deleting category: {e}"); return False
 
 def generate_report_xml(report_data: pd.Series, expenses_data: pd.DataFrame, submitter_name: str):
-    # ... (XML generation logic) ...
-    pass
+    def create_sub_element(parent, tag, text, attributes=None):
+        element = ET.SubElement(parent, tag, attrib=attributes or {})
+        element.text = str(text) if text is not None and pd.notna(text) else ""
+        return element
+    # ... (rest of XML generation logic)
