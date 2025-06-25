@@ -1,34 +1,43 @@
 # File: pages/8_Edit_User.py
 
 import streamlit as st
-from utils.db_utils import get_user_by_id, update_user
+from utils.supabase_utils import get_single_user_details, update_user_details
 
 st.set_page_config(page_title="Edit User", layout="centered")
 st.title("Edit User")
 
-# Grab the ID we stored
+# Retrieve the ID we stashed in session_state
 user_id = st.session_state.get("selected_user_id")
 if not user_id:
-    st.error("No user was selected. Go back and pick one.")
+    st.error("No user selected. Please go back and choose a user.")
     st.stop()
 
-# Load and validate
-user = get_user_by_id(user_id)
+# Load the user’s current details
+user = get_single_user_details(user_id)
 if not user:
     st.error(f"User with ID {user_id} not found.")
     st.stop()
 
-# Editable form
+# Build the edit form
 name = st.text_input("Name", value=user["name"])
 username = st.text_input("Username", value=user["username"])
-roles = ["Admin", "Editor", "Viewer"]  # adapt to your schema
-current = user.get("role", roles[0])
-role = st.selectbox("Role", options=roles, index=roles.index(current))
+
+# Role choices (adjust to match your actual roles)
+roles = ["user", "admin", "approver"]
+current_role = user.get("role", roles[0])
+role = st.selectbox("Role", options=roles, index=roles.index(current_role))
+
+# (Optional) If you expose approver or default category edits, add more fields here…
 
 st.write("---")
 if st.button("Save changes"):
-    ok = update_user(user_id, name=name, username=username, role=role)
-    if ok:
+    success = update_user_details(
+        user_id,
+        role=role,
+        approver_id=user.get("approver_id"),
+        default_category_id=user.get("default_category_id"),
+    )
+    if success:
         st.success("User updated successfully!")
     else:
-        st.error("Failed to update user. Check your logs.")
+        st.error("Failed to update user—check the logs.")
