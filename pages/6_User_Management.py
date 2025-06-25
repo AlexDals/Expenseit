@@ -95,22 +95,20 @@ if st.button("Save All User Changes"):
         
         # 2. Process Edits
         for row_index, changes in editor_state.get("edited_rows", {}).items():
-            user_id_to_update = all_users_df.iloc[row_index]['id']
-            full_row = edited_df.iloc[row_index] # Get the complete edited row
-            approver_id = approver_name_to_id.get(full_row['approver_name'])
-            category_id = category_name_to_id.get(full_row['default_category_name'])
-            if not su.update_user_details(user_id_to_update, full_row['role'], approver_id, category_id):
+            user_id_to_update = edited_df.iloc[row_index]['id']
+            full_edited_row = edited_df.iloc[row_index]
+            approver_id = approver_name_to_id.get(full_edited_row['approver_name'])
+            category_id = category_name_to_id.get(full_edited_row['default_category_name'])
+            if not su.update_user_details(user_id_to_update, full_edited_row['role'], approver_id, category_id):
                 all_success = False
 
         # 3. Process Additions
         for new_user_data in editor_state.get("added_rows", []):
-            # For new users, we must use the 'Create User' form to set a password.
-            # This logic just provides a warning for now.
             st.warning(f"A new row was added for user '{new_user_data.get('name')}' but cannot be saved without a password. Please use the 'Create a New User' form above.")
-            all_success = False # Mark as not fully successful
+            all_success = False
         
         if all_success:
             st.success("All changes saved successfully!")
             st.rerun()
         else:
-            st.error("One or more changes could not be saved. Please review warnings.")
+            st.error("One or more changes could not be saved. Please review warnings and try again.")
