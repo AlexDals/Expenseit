@@ -1,39 +1,35 @@
+# File: pages/6_Users.py
+
 import streamlit as st
-from utils import supabase_utils as su
 import pandas as pd
+from utils.db_utils import get_all_users  # your function to fetch the users
 
-st.title("⚙️ User Management")
+# Optional: make sure session_state key exists
+if "selected_user_id" not in st.session_state:
+    st.session_state.selected_user_id = None
 
-# --- Authentication Guard ---
-if not st.session_state.get("authentication_status") or st.session_state.get("role") != 'admin':
-    st.error("You do not have permission to access this page.")
-    st.stop()
+st.set_page_config(page_title="Users", layout="wide")
+st.title("User Management")
 
-# --- Navigation ---
-col1, col2 = st.columns([4, 1])
-with col2:
-    if st.button("➕ Add User", use_container_width=True, type="primary"):
-        st.switch_page("pages/7_Add_User.py")
+# Load your users into a DataFrame or list of dicts
+users = get_all_users()  # e.g. returns List[Dict] or pd.DataFrame
+if isinstance(users, pd.DataFrame):
+    all_users = users.to_dict(orient="records")
+else:
+    all_users = users
 
-st.markdown("---")
-st.subheader("Existing Users")
-st.info("Click on a user's name to edit their details.")
+if not all_users:
+    st.info("No users found.")
+else:
+    for user in all_users:
+        col1, col2 = st.columns([4, 1])
+        # Button sets session_state and switches pages
+        if col1.button(
+            f"✏️ {user['name']} (`{user['username']}`)",
+            key=f"edit_{user['id']}",
+            use_container_width=True,
+        ):
+            st.session_state.selected_user_id = user["id"]
+            st.switch_page("pages/8_Edit_User.py")
 
-all_users_df = su.get_all_users()
-
-if all_users_df.empty:
-    st.warning("No users found.")
-    st.stop()
-
-# --- Display User List ---
-# We will use st.page_link which is the modern way to create navigation links
-for index, user in all_users_df.iterrows():
-    with st.container(border=True):
-        col1, col2 = st.columns(2)
-        # Create a clickable link on the user's name
-        col1.page_link(
-            f"pages/8_Edit_User.py?user_id={user['id']}", 
-            label=f"**{user['name']}** (`{user['username']}`)",
-            icon="✏️"
-        )
-        col2.write(f"**Role:** `{user['role']}`")
+        col2.markdown(f"**Role:** `{user.get('role','—')}`")
