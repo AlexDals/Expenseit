@@ -14,9 +14,19 @@ def init_connection() -> Client:
         key = st.secrets["supabase"]["key"]
         return create_client(url, key)
     except KeyError:
-        st.error("Supabase credentials not found.")
-        st.stop()
+        st.error("Supabase credentials not found."); st.stop()
 
+# --- NEW FUNCTION ---
+def get_single_user_details(user_id: str):
+    """Fetches all details for a single user to populate the edit form."""
+    supabase = init_connection()
+    try:
+        response = supabase.table('users').select("id, username, name, email, role, approver_id, default_category_id").eq('id', user_id).maybe_single().execute()
+        return response.data
+    except Exception as e:
+        st.error(f"Error fetching user details: {e}"); return None
+
+# --- All other functions are included below for completeness ---
 def fetch_all_users_for_auth():
     supabase = init_connection()
     try:
