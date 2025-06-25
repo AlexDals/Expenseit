@@ -1,11 +1,8 @@
 # File: pages/7_Add_User.py
 
 import streamlit as st
-from utils.supabase_utils import (
-    create_user_details,
-    get_all_categories,
-    get_all_approvers,
-)
+import bcrypt
+from utils.supabase_utils import init_connection, get_all_approvers
 
 st.set_page_config(page_title="Add User", layout="centered")
 st.title("Add User")
@@ -21,36 +18,57 @@ role = st.selectbox("Role", options=roles, index=0)
 
 st.write("---")
 
+# — Supabase client
+supabase = init_connection()
+
 # — Default Category selector
-categories = get_all_categories()  # returns list of dicts: {'id', 'name', …}
+#   Fetch all categories from Supabase
+categories = supabase.table("categories").select("id, name").execute().data or []
+if not categories:
+    st.error("No categories found. Please add some first.")
+    st.stop()
+
 cat_names = [c["name"] for c in categories]
 selected_cat_name = st.selectbox("Default Category", options=cat_names)
 selected_cat_id = next(c["id"] for c in categories if c["name"] == selected_cat_name)
 
 # — Approver selector
-approvers = get_all_approvers()  # returns list of dicts: {'id', 'name', …}
+approvers = get_all_approvers()  # list of dicts: {'id', 'name'}
+if not approvers:
+    st.error("No approvers found. Please ensure you have at least one approver user.")
+    st.stop()
+
 approver_names = [a["name"] for a in approvers]
 selected_app_name = st.selectbox("Approver", options=approver_names)
 selected_app_id = next(a["id"] for a in approvers if a["name"] == selected_app_name)
 
 st.write("---")
-# — Create button
 if st.button("Create user"):
     # Basic validation
-    if not name or not username or not password:
+    if not (name and username and password):
         st.error("Please fill out Name, Username, and Password.")
     else:
-        success = create_user_details(
-            name=name,
-            username=username,
-            password=password,
-            role=role,
-            approver_id=selected_app_id,
-            default_category_id=selected_cat_id,
-        )
-        if success:
-            st.success("User created successfully!")
-            # Optionally reset fields or navigate back to Users page
-            st.experimental_rerun()
-        else:
-            st.error("Failed to create user—please check the logs.")
+        # Hash the password
+        hashed_pw = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode()
+
+        # Prepare the new user record
+        new_user = {
+            "name": name,
+            "username": username,
+            "hashed_password": hashed_pw,
+            "role": role,
+            "approver_id": selected_app_id,
+            "default_category_id": selected_cat_id,
+        }
+
+        # Insert into Supabase
+        try:
+            result = supabase.table("users").insert(new_user).execute()
+            if result.error:
+                st.error(f"Error creating user: {result.error.message}")
+            else:
+                st.success("User created successfully!")
+                # Reset the form or redirect back to Users page
+                st.experimental_rerun()
+        except Exception as e:
+            st.error(f"Unexpected error: {e}")
