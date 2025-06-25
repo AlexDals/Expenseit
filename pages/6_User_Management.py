@@ -63,15 +63,12 @@ if all_users_df.empty:
 all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
 all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
-# Store the original dataframe in session state to compare against edits
-if 'original_users_df' not in st.session_state:
-    st.session_state.original_users_df = all_users_df.copy()
-
 # --- The Data Editor ---
+# We use num_rows="dynamic" to allow row deletion, but additions will be ignored by save logic
 edited_df = st.data_editor(
     all_users_df,
     column_config={
-        "id": None, "approver_id": None, "default_category_id": None, "email": None,
+        "id": None, "approver_id": None, "default_category_id": None, "email": "Email",
         "username": "Username", "name": "Full Name",
         "role": st.column_config.SelectboxColumn("Role", options=["user", "approver", "admin"], required=True),
         "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
@@ -94,23 +91,21 @@ if st.button("Save All User Changes"):
         for user_data in edited_users_list:
             user_id = user_data.get('id')
             
-            # This handles newly added rows that don't have an ID yet
+            # This handles newly added rows that don't have an ID yet by skipping them
             if pd.isna(user_id):
-                st.warning("Adding new users directly in the grid is not yet supported. Please use the 'Create a New User' form above.")
+                st.warning("Adding new users directly in the grid is not supported. Please use the 'Create a New User' form above.")
                 continue
 
             # Convert friendly names back to IDs for saving
             approver_id = approver_name_to_id.get(user_data['approver_name'])
             category_id = category_name_to_id.get(user_data['default_category_name'])
             
-            # Call the updated details function
+            # Call the update details function for every existing user
             if not su.update_user_details(user_id, user_data['role'], approver_id, category_id):
                 all_success = False
         
         if all_success:
             st.success("All changes saved successfully!")
-            # Update the baseline state and rerun
-            st.session_state.original_users_df = pd.DataFrame(edited_df)
             st.rerun()
         else:
             st.error("One or more changes could not be saved.")
