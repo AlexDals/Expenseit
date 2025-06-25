@@ -64,6 +64,10 @@ all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fi
 all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
 # --- The Data Editor ---
+editor_key = "user_editor"
+if editor_key not in st.session_state:
+    st.session_state[editor_key] = {"edited_rows": {}}
+
 edited_df = st.data_editor(
     all_users_df,
     column_config={
@@ -75,34 +79,33 @@ edited_df = st.data_editor(
     },
     disabled=["username", "name", "email"],
     hide_index=True,
-    key="user_editor"
+    key=editor_key
 )
 
 # --- DEFINITIVE SAVE LOGIC ---
-if st.button("Save All User Changes"):
-    with st.spinner("Saving changes..."):
-        all_success = True
-        
-        # Convert the potentially edited dataframe back to a list of dictionaries
-        edited_users_list = edited_df.to_dict('records')
-        
-        for user_data in edited_users_list:
-            user_id = user_data.get('id')
-            if not user_id:
-                # This would be a new row, which should be handled by the create form.
-                # We can add logic here later if needed.
-                continue
-
-            # Convert friendly names back to IDs for saving
-            approver_id = approver_name_to_id.get(user_data['approver_name'])
-            category_id = category_name_to_id.get(user_data['default_category_name'])
+if st.session_state[editor_key].get("edited_rows"):
+    if st.button("Save User Changes"):
+        with st.spinner("Saving..."):
+            edited_rows = st.session_state[editor_key]["edited_rows"]
+            all_success = True
             
-            # Call the updated details function
-            if not su.update_user_details(user_id, user_data['role'], approver_id, category_id):
-                all_success = False
-        
-        if all_success:
-            st.success("All changes saved successfully!")
-            st.rerun()
-        else:
-            st.error("One or more changes could not be saved.")
+            for row_index, changes in edited_rows.items():
+                user_id = all_users_df.iloc[row_index]['id']
+                
+                # Get the full row of potentially edited data
+                full_edited_row = edited_df.iloc[row_index]
+                
+                # Convert names back to IDs for saving
+                approver_id = approver_name_to_id.get(full_edited_row['approver_name'])
+                category_id = category_name_to_id.get(full_edited_row['default_category_name'])
+                
+                if not su.update_user_details(user_id, full_edited_row['role'], approver_id, category_id):
+                    all_success = False
+            
+            if all_success:
+                st.success("All changes saved successfully!")
+                # Clear the edited_rows state to hide the button after saving
+                st.session_state[editor_key]["edited_rows"] = {}
+                st.rerun()
+            else:
+                st.error("One or more changes could not be saved.")
