@@ -1,24 +1,25 @@
 # File: pages/6_Users.py
 
 import streamlit as st
-from utils.db_utils import get_all_users
+import pandas as pd
+from utils.supabase_utils import get_all_users
 
 st.set_page_config(page_title="Users", layout="wide")
 st.title("User Management")
 
-# Ensure the session key exists
+# Ensure we have a slot for the selected user
 st.session_state.setdefault("selected_user_id", None)
 
-# Fetch users (list of dicts or a DataFrame)
-users = get_all_users()
-if hasattr(users, "to_dict"):
-    users = users.to_dict(orient="records")
+# Fetch all users as a DataFrame
+users_df: pd.DataFrame = get_all_users()
 
-if not users:
+if users_df.empty:
     st.info("No users found.")
 else:
+    users = users_df.to_dict(orient="records")
     for u in users:
         col1, col2 = st.columns([4, 1])
+        # Clicking this button stores the ID and jumps to the edit page
         if col1.button(
             f"✏️ {u['name']} (`{u['username']}`)",
             key=f"edit_{u['id']}",
