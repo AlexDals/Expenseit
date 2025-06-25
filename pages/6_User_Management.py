@@ -12,7 +12,7 @@ if not st.session_state.get("authentication_status") or st.session_state.get("ro
     st.stop()
 
 # --- Admin User Creation Form ---
-with st.expander("➕ Create a New User"):
+with st.expander("➕ Create a New User (Recommended)"):
     with st.form("admin_create_user_form", clear_on_submit=True):
         st.subheader("New User Details")
         new_name = st.text_input("Full Name*")
@@ -40,7 +40,7 @@ st.markdown("---")
 
 # --- Existing User Editing Logic ---
 st.subheader("Edit Existing Users")
-st.info("Edit user roles, approvers, and default categories below.")
+st.info("You can edit, add, or delete users directly in the grid below. Click 'Save All Changes' when you are done.")
 
 # --- Data Preparation for Editor ---
 all_users_df = su.get_all_users()
@@ -59,53 +59,58 @@ if all_users_df.empty:
     st.warning("No users found.")
     st.stop()
 
-# Prepare dataframe for editing by replacing IDs with human-readable names
+# Prepare dataframe for editing
 all_users_df['approver_name'] = all_users_df['approver_id'].map(approver_map).fillna("")
 all_users_df['default_category_name'] = all_users_df['default_category_id'].map(category_map).fillna("")
 
 # --- The Data Editor ---
-# We use num_rows="dynamic" to allow row deletion, but additions will be ignored by save logic
+editor_key = "user_editor"
 edited_df = st.data_editor(
     all_users_df,
     column_config={
-        "id": None, "approver_id": None, "default_category_id": None, "email": "Email",
-        "username": "Username", "name": "Full Name",
+        "id": None, "approver_id": None, "default_category_id": None, 
+        "username": st.column_config.TextColumn("Username", required=True),
+        "name": st.column_config.TextColumn("Full Name", required=True),
+        "email": st.column_config.TextColumn("Email", required=True),
         "role": st.column_config.SelectboxColumn("Role", options=["user", "approver", "admin"], required=True),
         "approver_name": st.column_config.SelectboxColumn("Approver", options=approver_options),
         "default_category_name": st.column_config.SelectboxColumn("Default Category", options=category_options)
     },
-    disabled=["username", "name", "email"],
-    hide_index=True,
     num_rows="dynamic",
-    key="user_editor"
+    hide_index=True,
+    key=editor_key
 )
 
 # --- DEFINITIVE SAVE LOGIC ---
 if st.button("Save All User Changes"):
     with st.spinner("Saving changes..."):
+        editor_state = st.session_state[editor_key]
         all_success = True
         
-        # Convert the potentially edited dataframe back to a list of dictionaries
-        edited_users_list = edited_df.to_dict('records')
-        
-        for user_data in edited_users_list:
-            user_id = user_data.get('id')
-            
-            # This handles newly added rows that don't have an ID yet by skipping them
-            if pd.isna(user_id):
-                st.warning("Adding new users directly in the grid is not supported. Please use the 'Create a New User' form above.")
-                continue
-
-            # Convert friendly names back to IDs for saving
-            approver_id = approver_name_to_id.get(user_data['approver_name'])
-            category_id = category_name_to_id.get(user_data['default_category_name'])
-            
-            # Call the update details function for every existing user
-            if not su.update_user_details(user_id, user_data['role'], approver_id, category_id):
+        # 1. Process Deletions
+        for row_index in editor_state.get("deleted_rows", []):
+            user_id_to_delete = all_users_df.iloc[row_index]['id']
+            if not su.delete_user(user_id_to_delete):
                 all_success = False
+        
+        # 2. Process Edits
+        for row_index, changes in editor_state.get("edited_rows", {}).items():
+            user_id_to_update = all_users_df.iloc[row_index]['id']
+            full_row = edited_df.iloc[row_index] # Get the complete edited row
+            approver_id = approver_name_to_id.get(full_row['approver_name'])
+            category_id = category_name_to_id.get(full_row['default_category_name'])
+            if not su.update_user_details(user_id_to_update, full_row['role'], approver_id, category_id):
+                all_success = False
+
+        # 3. Process Additions
+        for new_user_data in editor_state.get("added_rows", []):
+            # For new users, we must use the 'Create User' form to set a password.
+            # This logic just provides a warning for now.
+            st.warning(f"A new row was added for user '{new_user_data.get('name')}' but cannot be saved without a password. Please use the 'Create a New User' form above.")
+            all_success = False # Mark as not fully successful
         
         if all_success:
             st.success("All changes saved successfully!")
             st.rerun()
         else:
-            st.error("One or more changes could not be saved.")
+            st.error("One or more changes could not be saved. Please review warnings.")
