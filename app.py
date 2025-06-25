@@ -2,8 +2,10 @@ import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
 
+# --- PAGE CONFIGURATION ---
 st.set_page_config(layout="wide", page_title="Expense Reporting")
 
+# --- USER AUTHENTICATION SETUP ---
 if 'authenticator' not in st.session_state:
     try:
         user_credentials = su.fetch_all_users_for_auth()
@@ -21,6 +23,7 @@ if 'authenticator' not in st.session_state:
         st.error(f"An error occurred during authentication setup: {e}")
         st.stop()
 
+# --- ROLE & ID CHECK AFTER LOGIN ---
 if st.session_state.get("authentication_status"):
     if 'role' not in st.session_state or st.session_state.role is None:
         username = st.session_state.get("username")
@@ -30,6 +33,7 @@ if st.session_state.get("authentication_status"):
             st.session_state["role"] = user_details.get("role")
             st.session_state["user_id"] = user_details.get("id")
 
+# --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
@@ -39,14 +43,16 @@ dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠",
 new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
 view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
-user_management_page = st.Page("pages/6_User_Management.py", title="User Management", icon="⚙️")
-category_management_page = st.Page("pages/7_Category_Management.py", title="Category Management", icon="📈")
-# Define the Edit User page, but it will only be added to the navigation graph for admins
-edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User")
+# --- NEW: Define the pages for the new User Management workflow ---
+users_page = st.Page("pages/6_Users.py", title="User Management", icon="⚙️")
+add_user_page = st.Page("pages/7_Add_User.py", title="Add User") # No icon to hide from sidebar
+edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User") # No icon to hide from sidebar
+category_management_page = st.Page("pages/9_Category_Management.py", title="Category Management", icon="📈")
+
 
 # Build the navigation dictionary based on role
 PAGES_FOR_ROLES = {
-    "admin": [dashboard_page, new_report_page, view_reports_page, user_management_page, category_management_page, edit_user_page],
+    "admin": [dashboard_page, new_report_page, view_reports_page, users_page, category_management_page, add_user_page, edit_user_page],
     "approver": [dashboard_page, new_report_page, view_reports_page],
     "user": [dashboard_page, new_report_page, view_reports_page],
     "logged_out": [login_page, register_page]
