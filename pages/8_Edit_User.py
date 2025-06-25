@@ -1,65 +1,36 @@
+# File: pages/8_Edit_User.py
+
 import streamlit as st
-from utils import supabase_utils as su
-import pandas as pd
+from utils.db_utils import get_user_by_id, update_user  # your fetch/update functions
 
-st.title("✏️ Edit User Profile")
+st.set_page_config(page_title="Edit User", layout="centered")
+st.title("Edit User")
 
-# --- Authentication Guard ---
-if not st.session_state.get("authentication_status") or st.session_state.get("role") != 'admin':
-    st.error("You do not have permission to access this page."); st.stop()
-
-# --- Get user ID from the URL query parameter ---
-try:
-    user_id_to_edit = st.query_params["user_id"]
-except KeyError:
-    st.error("No user selected for editing.")
-    st.page_link("pages/6_Users.py", label="← Back to User Management", icon="⚙️")
+# Retrieve the ID that we stored in session_state
+user_id = st.session_state.get("selected_user_id")
+if user_id is None:
+    st.error("No user was selected. Please go back and choose a user to edit.")
     st.stop()
 
-# --- Fetch Data for Dropdowns and User Details ---
-user_data = su.get_single_user_details(user_id_to_edit)
-if not user_data:
-    st.error("Could not fetch details for the selected user."); st.stop()
+# Fetch existing user data
+user = get_user_by_id(user_id)
+if user is None:
+    st.error(f"User with ID {user_id} not found.")
+    st.stop()
 
-approvers = su.get_all_approvers()
-categories = su.get_all_categories()
-approver_map = {approver['id']: approver['name'] for approver in approvers}
-approver_options = [""] + list(approver_map.values())
-approver_name_to_id = {v: k for k, v in approver_map.items()}
-category_map = {cat['id']: cat['name'] for cat in categories}
-category_options = [""] + list(category_map.values())
-category_name_to_id = {v: k for k, v in category_map.items()}
+# Editable fields
+name = st.text_input("Name", value=user["name"])
+username = st.text_input("Username", value=user["username"])
+role = st.selectbox(
+    "Role",
+    options=["Admin", "Editor", "Viewer"],  # replace with your actual roles
+    index=["Admin", "Editor", "Viewer"].index(user.get("role", "Viewer")),
+)
 
-# --- Edit Form ---
-with st.form("edit_user_form"):
-    st.subheader(f"Editing profile for: {user_data['name']} (`{user_data['username']}`)")
-    st.write(f"Email: {user_data['email']}")
-    st.markdown("---")
-
-    # Get current values for the form to set the default selection
-    current_role_index = ["user", "approver", "admin"].index(user_data.get('role', 'user'))
-    current_approver_name = approver_map.get(user_data.get('approver_id'), "")
-    current_approver_index = approver_options.index(current_approver_name) if current_approver_name in approver_options else 0
-    current_category_name = category_map.get(user_data.get('default_category_id'), "")
-    current_category_index = category_options.index(current_category_name) if current_category_name in category_options else 0
-
-    # Form widgets
-    new_role = st.selectbox("Role", options=["user", "approver", "admin"], index=current_role_index)
-    new_approver_name = st.selectbox("Approver", options=approver_options, index=current_approver_index)
-    new_category_name = st.selectbox("Default Category", options=category_options, index=current_category_index)
-    
-    submitted = st.form_submit_button("Save Changes")
-    if submitted:
-        approver_id = approver_name_to_id.get(new_approver_name)
-        category_id = category_name_to_id.get(new_category_name)
-        
-        with st.spinner("Saving..."):
-            if su.update_user_details(user_id_to_edit, new_role, approver_id, category_id):
-                st.success("User details updated successfully!")
-                st.info("Returning to user list...")
-                del st.query_params["user_id"] # Clear param before switching
-                st.switch_page("pages/6_Users.py")
-            else:
-                st.error("Failed to update user details.")
-
-st.page_link("pages/6_Users.py", label="← Back to User Management", icon="⚙️")
+st.write("---")
+if st.button("Save changes"):
+    success = update_user(user_id, name=name, username=username, role=role)
+    if success:
+        st.success("User updated successfully!")
+    else:
+        st.error("Failed to update user—check the logs.")
