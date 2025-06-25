@@ -55,9 +55,11 @@ if is_logged_in:
     if user_role == 'admin':
         nav_pages.append(user_management_page)
         nav_pages.append(category_management_page)
-        # Add the hidden page to the navigation graph for admins, but it won't be in the sidebar
+        # Add the hidden page to the navigation graph for admins.
+        # It will not appear in the sidebar because it has no icon.
         nav_pages.append(edit_user_page)
 else:
+    # If the user is logged out, show only the account pages.
     nav_pages = [login_page, register_page]
 
 # Create and run the navigation
