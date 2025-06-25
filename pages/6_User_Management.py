@@ -12,7 +12,7 @@ if not st.session_state.get("authentication_status") or st.session_state.get("ro
     st.stop()
 
 # --- Admin User Creation Form ---
-with st.expander("➕ Create a New User"):
+with st.expander("➕ Create a New User (Recommended)"):
     with st.form("admin_create_user_form", clear_on_submit=True):
         st.subheader("New User Details")
         new_name = st.text_input("Full Name*")
@@ -55,11 +55,10 @@ for index, user in all_users_df.iterrows():
             st.write(f"**{user['name']}** (`{user['username']}`)")
             st.caption(f"Role: `{user['role']}`")
         with col2:
-            # Use st.page_link to navigate with a query parameter
+            # --- DEFINITIVE FIX: Manually construct the URL with query parameters ---
             st.page_link(
-                "pages/8_Edit_User.py", 
+                f"pages/8_Edit_User.py?user_id={user['id']}", 
                 label="Edit", 
                 icon="✏️",
-                use_container_width=True,
-                query_params={"user_id": user['id']}
+                use_container_width=True
             )
