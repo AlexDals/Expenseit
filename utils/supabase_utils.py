@@ -87,6 +87,17 @@ def update_user_details(user_id, role, approver_id, default_category_id):
     except Exception as e:
         st.error(f"Error updating user details: {e}"); return False
 
+def delete_user(user_id):
+    """Deletes a user from the database."""
+    supabase = init_connection()
+    try:
+        supabase.table('users').delete().eq('id', user_id).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error deleting user: {e}")
+        return False
+
+
 def add_report(user_id, report_name, total_amount):
     supabase = init_connection()
     try:
