@@ -63,14 +63,28 @@ def get_user_role(username: str):
         return None
 
 def get_all_users():
-    """Fetches all user data for the management page."""
+    """Fetches all user data for the management page, including the default category."""
     supabase = init_connection()
     try:
-        response = supabase.table('users').select("id, username, name, email, role, approver_id, department").execute()
-        return pd.DataFrame(response.data)
+        # We join to the categories table to get the category name for display
+        response = supabase.table('users').select("id, username, name, email, role, approver_id, default_category:categories(id, name)").execute()
+        
+        # Flatten the nested category data
+        users = response.data
+        for user in users:
+            if user.get('default_category') and isinstance(user['default_category'], dict):
+                user['default_category_name'] = user['default_category'].get('name')
+                user['default_category_id'] = user['default_category'].get('id')
+            else:
+                user['default_category_name'] = None
+                user['default_category_id'] = None
+            user.pop('default_category', None)
+
+        return pd.DataFrame(users)
     except Exception as e:
         st.error(f"Error fetching all users: {e}")
         return pd.DataFrame()
+
 
 def get_all_approvers():
     """Fetches all users with the 'approver' OR 'admin' role."""
@@ -82,14 +96,14 @@ def get_all_approvers():
         st.error(f"Error fetching approvers: {e}")
         return []
 
-def update_user_details(user_id, role, approver_id, department):
-    """Updates a user's role, assigned approver, and department."""
+def update_user_details(user_id, role, approver_id, default_category_id):
+    """Updates a user's role, assigned approver, and default category."""
     supabase = init_connection()
     try:
         supabase.table('users').update({
             "role": role,
             "approver_id": approver_id,
-            "department": department
+            "default_category_id": default_category_id
         }).eq('id', user_id).execute()
         return True
     except Exception as e:
@@ -200,22 +214,34 @@ def get_receipt_public_url(path: str):
     return supabase.storage.from_('receipts').get_public_url(path)
 
 def get_reports_for_approver(approver_id):
-    """Fetches reports for an approver based on department."""
+    """
+    Fetches reports for an approver based on their default category.
+    An approver can see all reports from users who share their same default category.
+    """
     supabase = init_connection()
     try:
-        approver_dept_response = supabase.table('users').select('department').eq('id', approver_id).maybe_single().execute()
-        if not approver_dept_response.data or not approver_dept_response.data.get('department'):
+        # 1. Get the approver's default category ID
+        approver_response = supabase.table('users').select('default_category_id').eq('id', approver_id).maybe_single().execute()
+        if not approver_response.data or not approver_response.data.get('default_category_id'):
+            st.warning("Your user profile does not have a default category assigned. You cannot see any reports to approve.")
             return pd.DataFrame()
-        approver_department = approver_dept_response.data['department']
-        employees_response = supabase.table('users').select('id').eq('department', approver_department).neq('id', approver_id).execute()
+        
+        approver_category_id = approver_response.data['default_category_id']
+
+        # 2. Find all users who share that same default category (excluding the approver themselves)
+        employees_response = supabase.table('users').select('id').eq('default_category_id', approver_category_id).neq('id', approver_id).execute()
         employee_ids = [user['id'] for user in employees_response.data]
+        
         if not employee_ids:
             return pd.DataFrame()
+
+        # 3. Fetch reports for those employees
         reports_response = supabase.table('reports').select("*, user:users!left(name)").in_('user_id', employee_ids).order('submission_date', desc=True).execute()
         return pd.DataFrame(reports_response.data)
     except Exception as e:
         st.error(f"Error fetching reports for approver: {e}")
         return pd.DataFrame()
+
 
 def get_all_reports():
     """Fetches all reports for admin view."""
