@@ -1,5 +1,6 @@
 import streamlit as st
 from utils import supabase_utils as su
+import pandas as pd
 
 st.title("✏️ Edit User Profile")
 
@@ -12,10 +13,10 @@ try:
     user_id_to_edit = st.query_params["user_id"]
 except KeyError:
     st.error("No user selected for editing.")
-    st.page_link("pages/6_User_Management.py", label="← Back to User Management", icon="⚙️")
+    st.page_link("pages/6_Users.py", label="← Back to User Management", icon="⚙️")
     st.stop()
 
-# --- Fetch Data ---
+# --- Fetch Data for Dropdowns and User Details ---
 user_data = su.get_single_user_details(user_id_to_edit)
 if not user_data:
     st.error("Could not fetch details for the selected user."); st.stop()
@@ -35,12 +36,14 @@ with st.form("edit_user_form"):
     st.write(f"Email: {user_data['email']}")
     st.markdown("---")
 
+    # Get current values for the form to set the default selection
     current_role_index = ["user", "approver", "admin"].index(user_data.get('role', 'user'))
     current_approver_name = approver_map.get(user_data.get('approver_id'), "")
     current_approver_index = approver_options.index(current_approver_name) if current_approver_name in approver_options else 0
     current_category_name = category_map.get(user_data.get('default_category_id'), "")
     current_category_index = category_options.index(current_category_name) if current_category_name in category_options else 0
 
+    # Form widgets
     new_role = st.selectbox("Role", options=["user", "approver", "admin"], index=current_role_index)
     new_approver_name = st.selectbox("Approver", options=approver_options, index=current_approver_index)
     new_category_name = st.selectbox("Default Category", options=category_options, index=current_category_index)
@@ -55,8 +58,8 @@ with st.form("edit_user_form"):
                 st.success("User details updated successfully!")
                 st.info("Returning to user list...")
                 del st.query_params["user_id"] # Clear param before switching
-                st.switch_page("pages/6_User_Management.py")
+                st.switch_page("pages/6_Users.py")
             else:
                 st.error("Failed to update user details.")
 
-st.page_link("pages/6_User_Management.py", label="← Back to User Management", icon="⚙️")
+st.page_link("pages/6_Users.py", label="← Back to User Management", icon="⚙️")
