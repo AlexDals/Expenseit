@@ -4,85 +4,100 @@ import streamlit as st
 import pandas as pd
 import io
 import zipfile
-from utils import supabase_utils as su
+from utils.supabase_utils import (
+    init_connection,
+    get_all_reports,
+    get_expenses_for_report,
+    generate_report_xml,
+    get_single_user_details,
+)
 
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# Initialize Supabase client
-supabase = su.init_connection()
+# 1) Initialize Supabase
+supabase = init_connection()
 
-# 1) Load all reports (DataFrame or list of dicts)
-reports = su.get_all_reports()
-if hasattr(reports, "to_dict"):
-    reports_list = reports.to_dict("records")
+# 2) Load all reports
+reports_df = get_all_reports()
+if hasattr(reports_df, "to_dict"):
+    reports = reports_df.to_dict("records")
 else:
-    reports_list = reports or []
+    reports = reports_df or []
 
-if not reports_list:
+if not reports:
     st.info("No reports found.")
     st.stop()
 
-# 2) Build the dropdown with the actual filer’s name
-options = []
-for r in reports_list:
-    report_name = r.get("report_name", "Untitled")
-    filer_name = "Unknown"
-    # Look up the filing user’s name via their user_id
-    uid = r.get("user_id") or r.get("username") or None
-    if uid:
-        user = su.get_single_user_details(uid)
-        if user and user.get("name"):
-            filer_name = user["name"]
-    options.append(f"{report_name} (filed by {filer_name})")
+# 3) Build dropdown with “filed by” using the nested user object or falling back to a lookup
+labels = []
+for r in reports:
+    rpt_name = r.get("report_name", "Untitled")
+    # Supabase returns a “user” field because of the select("*, user:users!left(name)")
+    user_obj = r.get("user")
+    if isinstance(user_obj, dict) and user_obj.get("name"):
+        filer = user_obj["name"]
+    else:
+        # fallback: if there’s a user_id, fetch it
+        uid = r.get("user_id")
+        filer = "Unknown"
+        if uid is not None:
+            user = get_single_user_details(uid)
+            filer = user.get("name", "Unknown") if user else "Unknown"
+    labels.append(f"{rpt_name} (filed by {filer})")
 
-selected = st.selectbox("Select a report", options, index=0)
-report = reports_list[options.index(selected)]
+selected_label = st.selectbox("Select a report", labels, index=0)
+selected_idx = labels.index(selected_label)
+report = reports[selected_idx]
 
-# 3) Fetch and display only the core columns
-items = su.get_expenses_for_report(report["id"])
-items_df = pd.DataFrame(items)
+# 4) Fetch and display only the key columns from that report’s expenses
+items_df = get_expenses_for_report(report["id"])
 if not items_df.empty:
-    display_df = items_df[["date", "vendor", "description", "amount"]]
-    st.dataframe(display_df)
+    # rename expense_date → Date for clarity, then select columns
+    disp = (
+        items_df
+        .rename(columns={"expense_date": "Date", "vendor": "Vendor", "description": "Description", "amount": "Amount"})
+        [["Date", "Vendor", "Description", "Amount"]]
+    )
+    st.dataframe(disp)
 else:
     st.write("No expense items found for this report.")
 
-# 4) Generate XML and force it to bytes for download_button
-xml_data = su.generate_report_xml(report, items)
+# 5) Generate and download the XML
+xml_data = generate_report_xml(pd.Series(report), items_df, None)
 xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
-clean_name = report.get("report_name", "report").replace(" ", "_")
-
+base = report.get("report_name", "report").replace(" ", "_")
 st.download_button(
     label="💿 Download as XML",
     data=xml_bytes,
-    file_name=f"{clean_name}.xml",
+    file_name=f"{base}.xml",
     mime="application/xml",
     use_container_width=True,
 )
 
-# 5) Build a ZIP of all receipt files
-zip_buf = io.BytesIO()
-with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
-    for item in items:
-        path = item.get("receipt_path")
+# 6) Bundle all receipt files into a ZIP and offer it for download
+zip_buffer = io.BytesIO()
+with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+    for _, row in items_df.iterrows():
+        path = row.get("receipt_path")
         if not path:
             continue
         try:
             resp = supabase.storage.from_("receipts").download(path)
+            # supabase-py v2 returns {'data': bytes, 'error': None}, v1 returns raw bytes
             file_bytes = resp.get("data") if isinstance(resp, dict) else resp
             if file_bytes:
-                fname = path.split("/")[-1]
-                zf.writestr(fname, file_bytes)
+                name = path.split("/")[-1]
+                zf.writestr(name, file_bytes)
         except Exception:
-            # Skip any missing or failed downloads
+            # skip missing or errored files
             pass
 
-zip_buf.seek(0)
+zip_buffer.seek(0)
 st.download_button(
     label="📦 Download Receipts ZIP",
-    data=zip_buf.read(),
-    file_name=f"{clean_name}_receipts.zip",
+    data=zip_buffer.read(),
+    file_name=f"{base}_receipts.zip",
     mime="application/zip",
     use_container_width=True,
 )
