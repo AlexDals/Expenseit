@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import io
 import zipfile
-import json
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
@@ -15,20 +14,22 @@ from utils.supabase_utils import (
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# Initialize Supabase client
+# 1) Init Supabase
 supabase = init_connection()
 
-# Load all reports
-y_reports = get_all_reports()
-reports = y_reports.to_dict("records") if hasattr(y_reports, "to_dict") else (y_reports or [])
+# 2) Load reports
+reports_df = get_all_reports()
+if hasattr(reports_df, "to_dict"):
+    reports = reports_df.to_dict("records")
+else:
+    reports = reports_df or []
 
 if not reports:
     st.info("No reports found.")
     st.stop()
 
-# Build dropdown with “filed by” context
+# 3) Build dropdown with “filed by”
 labels = []
-filer_map = {}
 for rpt in reports:
     name = rpt.get("report_name", "Untitled")
     user_obj = rpt.get("user")
@@ -42,88 +43,53 @@ for rpt in reports:
         else:
             filer = "Unknown"
     labels.append(f"{name} (filed by {filer})")
-    filer_map[rpt["id"]] = filer
 
 selected = st.selectbox("Select a report", labels, index=0)
 report = reports[labels.index(selected)]
-filer_name = filer_map[report["id"]]
 
-# Fetch expense items for that report
+# 4) Fetch and display only the core columns
 items_df = get_expenses_for_report(report["id"])
-
-# Display full details including taxes
 if not items_df.empty:
-    # Rename columns for display
     df = items_df.rename(columns={
         "expense_date": "Date",
         "date": "Date",
         "vendor": "Vendor",
         "description": "Description",
         "amount": "Amount",
-        "gst_amount": "GST/TPS",
-        "pst_amount": "PST/QST",
-        "hst_amount": "HST/TVH",
     })
-    # Select display columns
-    display_cols = ["Date", "Vendor", "Description", "Amount", "GST/TPS", "PST/QST", "HST/TVH"]
-    display_df = df[display_cols]
+    display_df = df[["Date", "Vendor", "Description", "Amount"]]
     st.dataframe(display_df)
 else:
     st.write("No expense items found for this report.")
 
-# Prepare base filename
+# 5) Prepare base filename
 base_name = report.get("report_name", "report").replace(" ", "_")
 
-# Export as Excel with all details
+# 6) Export as Excel (fixed to use openpyxl)
 if not items_df.empty:
     excel_buffer = io.BytesIO()
-    # Write multiple sheets: Summary and Line Items
-    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
-        # Summary sheet: all expense item fields
-        df.to_excel(writer, sheet_name='Summary', index=False)
-
-        # Line Items sheet: flatten nested items
-        all_lines = []
+    # Use openpyxl instead of xlsxwriter
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        # Summary sheet
+        display_df.to_excel(writer, index=False, sheet_name="Summary")
+        # Line Items sheet
+        # Flatten all line_items into a detail table
+        all_li = []
         for _, row in items_df.iterrows():
-            raw_items = row.get('line_items')
-            # parse JSON string
-            if isinstance(raw_items, str):
-                try:
-                    parsed = json.loads(raw_items)
-                except Exception:
-                    parsed = []
-            elif isinstance(raw_items, list):
-                parsed = raw_items
-            else:
-                parsed = []
-            for item in parsed:
-                if isinstance(item, dict):
-                    line = item.copy()
-                else:
-                    line = {'value': item}
-                # add parent expense context
-                line['Parent Expense Date'] = row.get('expense_date') or row.get('date')
-                line['Parent Vendor'] = row.get('vendor')
-                line['Parent Total Amount'] = row.get('amount')
-                all_lines.append(line)
-        if all_lines:
-            lines_df = pd.DataFrame(all_lines)
-            # Rename common keys for clarity
-            rename_map = {}
-            if 'description' in lines_df.columns:
-                rename_map['description'] = 'Line Description'
-            if 'price' in lines_df.columns:
-                rename_map['price'] = 'Line Price'
-            if 'category' in lines_df.columns:
-                rename_map['category'] = 'Line Category'
-            if 'category_id' in lines_df.columns:
-                rename_map['category_id'] = 'Line Category ID'
-            if 'category_name' in lines_df.columns:
-                rename_map['category_name'] = 'Line Category Name'
-            if rename_map:
-                lines_df = lines_df.rename(columns=rename_map)
-            lines_df.to_excel(writer, sheet_name='Line Items', index=False)
+            for li in row.get("line_items", []):
+                all_li.append({
+                    "Parent Expense Date": row.get("date", row.get("expense_date")),
+                    "Parent Vendor": row.get("vendor"),
+                    "Parent Total Amount": row.get("amount"),
+                    "Description": li.get("description"),
+                    "Price": li.get("price"),
+                    "Category": li.get("category_name"),
+                    "Category ID": li.get("category_id"),
+                })
+        if all_li:
+            pd.DataFrame(all_li).to_excel(writer, index=False, sheet_name="Line Items")
     excel_buffer.seek(0)
+
     st.download_button(
         label="📊 Export as Excel",
         data=excel_buffer.read(),
@@ -132,7 +98,7 @@ if not items_df.empty:
         use_container_width=True,
     )
 
-# Bundle receipts into ZIP for download
+# 7) Bundle receipts into ZIP
 zip_buffer = io.BytesIO()
 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
@@ -143,8 +109,8 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             resp = supabase.storage.from_("receipts").download(path)
             file_bytes = resp.get("data") if isinstance(resp, dict) else resp
             if file_bytes:
-                fname = path.split("/")[-1]
-                zf.writestr(fname, file_bytes)
+                filename = path.split("/")[-1]
+                zf.writestr(filename, file_bytes)
         except Exception:
             pass
 
