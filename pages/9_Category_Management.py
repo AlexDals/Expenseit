@@ -1,86 +1,91 @@
+# File: pages/9_Category_Management.py
+
 import streamlit as st
-from utils import supabase_utils as su
-import pandas as pd
+from utils.supabase_utils import (
+    init_connection,
+    get_all_users,
+    get_single_user_details,
+    update_user_details,
+)
 
-# The redundant st.set_page_config() call has been removed from this file.
+st.set_page_config(page_title="Category Management", layout="wide")
+st.title("Category Management")
 
-st.title("📈 Category & GL Account Management")
+supabase = init_connection()
 
-# --- Authentication Guard ---
-if not st.session_state.get("authentication_status") or st.session_state.get("role") != 'admin':
-    st.error("You do not have permission to access this page.")
+# --- 1) CATEGORY CRUD ---------------------------------------
+
+st.header("Manage Categories")
+
+# Fetch all categories
+cat_res = (
+    supabase
+    .table("categories")
+    .select("id, name")
+    .order("name", ascending=True)
+    .execute()
+)
+if cat_res.error:
+    st.error(f"Error loading categories: {cat_res.error.message}")
     st.stop()
+categories = cat_res.data
 
-# --- Create New Category Form ---
-with st.expander("➕ Create a New Category"):
-    with st.form("new_category_form", clear_on_submit=True):
-        name = st.text_input("Category Name*")
-        gl_account = st.number_input("GL Account Number", value=None, step=1, format="%d")
-        submitted = st.form_submit_button("Create Category")
-        if submitted:
-            if name:
-                if su.add_category(name, gl_account):
-                    st.success(f"Category '{name}' created successfully!")
-                    st.rerun()
-            else:
-                st.error("Category Name is a required field.")
+# List existing categories with inline edit/delete
+for cat in categories:
+    col1, col2, col3 = st.columns([4, 1, 1])
+    new_name = col1.text_input("", value=cat["name"], key=f"cat_name_{cat['id']}")
+    if col2.button("Update", key=f"update_cat_{cat['id']}"):
+        supabase.table("categories").update({"name": new_name}).eq("id", cat["id"]).execute()
+        st.success(f"Renamed category to '{new_name}'.")
+        st.experimental_rerun()
+    if col3.button("Delete", key=f"delete_cat_{cat['id']}"):
+        supabase.table("categories").delete().eq("id", cat["id"]).execute()
+        st.success(f"Deleted category '{cat['name']}'.")
+        st.experimental_rerun()
 
-st.markdown("---")
+# Add new category
+st.subheader("Add New Category")
+new_cat = st.text_input("Name", key="new_cat_name")
+if st.button("Add Category"):
+    if not new_cat:
+        st.error("Enter a category name.")
+    else:
+        supabase.table("categories").insert({"name": new_cat}).execute()
+        st.success(f"Added category '{new_cat}'.")
+        st.experimental_rerun()
 
-# --- Edit Existing Categories ---
-st.subheader("Edit Existing Categories")
-categories = su.get_all_categories()
+st.write("---")
 
-if not categories:
-    st.info("No categories created yet. Use the form above to add one.")
+# --- 2) ASSIGN DEFAULT CATEGORY TO USER --------------------
+
+st.header("Assign Default Category to User")
+
+# Fetch users
+users_df = get_all_users()
+users = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
+
+if not users:
+    st.info("No users found to assign.")
 else:
-    # Use st.data_editor to allow edits, additions, and deletions
-    edited_data = st.data_editor(
-        pd.DataFrame(categories),
-        num_rows="dynamic", # Allow adding and deleting rows
-        use_container_width=True,
-        column_config={
-            "id": None, # Hide the ID
-            "name": st.column_config.TextColumn("Category Name", required=True),
-            "gl_account": st.column_config.NumberColumn("GL Account", format="%d"),
-        },
-        key="category_editor"
-    )
-    
-    if st.button("Save All Changes"):
-        with st.spinner("Saving..."):
-            original_df = pd.DataFrame(categories)
-            edited_df = pd.DataFrame(edited_data)
-            
-            all_success = True
-            
-            # Find and process deleted rows
-            original_ids = set(original_df['id'].dropna())
-            edited_ids = set(edited_df['id'].dropna())
-            deleted_ids = original_ids - edited_ids
-            for cat_id in deleted_ids:
-                if not su.delete_category(cat_id):
-                    all_success = False
-            
-            # Find and process added or updated rows
-            for index, row in edited_df.iterrows():
-                name = row['name']
-                gl = int(row['gl_account']) if pd.notna(row['gl_account']) else None
-                cat_id = row.get("id")
+    user_labels = [f"{u['name']} ({u['username']})" for u in users]
+    sel_user_label = st.selectbox("Select User", options=user_labels, key="assign_user")
+    sel_user = users[user_labels.index(sel_user_label)]
 
-                if pd.isna(cat_id): # This is a new row
-                    if not su.add_category(name, gl):
-                        all_success = False
-                else: # This is an existing row to update
-                    original_row = original_df[original_df['id'] == cat_id]
-                    # Check if the row has actually changed
-                    if not original_row.empty and (original_row.iloc[0]['name'] != name or original_row.iloc[0]['gl_account'] != gl):
-                        if not su.update_category(cat_id, name, gl):
-                            all_success = False
+    # Re-use categories from above
+    cat_labels = [c["name"] for c in categories]
+    sel_cat_name = st.selectbox("Select Default Category", options=cat_labels, key="assign_cat")
+    sel_cat_id = next(c["id"] for c in categories if c["name"] == sel_cat_name)
 
-            if all_success:
-                st.success("All changes saved successfully!")
-            else:
-                st.error("One or more changes could not be saved. Please check for duplicate names.")
-            
-            st.rerun()
+    if st.button("Assign Default Category"):
+        # Pull full user details so we can preserve other fields
+        details = get_single_user_details(sel_user["id"])
+        ok = update_user_details(
+            sel_user["id"],
+            role=details["role"],
+            approver_id=details.get("approver_id"),
+            default_category_id=sel_cat_id,
+        )
+        if ok:
+            st.success(f"Set default category for '{sel_user['name']}' to '{sel_cat_name}'.")
+        else:
+            st.error("Failed to update user. Check the logs.")
