@@ -16,21 +16,17 @@ supabase = init_connection()
 # --- 1) CATEGORY CRUD ---------------------------------------
 st.header("Manage Categories")
 
-# Fetch all categories in ascending order by name
+# Fetch all categories (no .order), then sort locally
 try:
-    res = (
-        supabase
-        .table("categories")
-        .select("id, name")
-        .order("name", desc=False)
-        .execute()
-    )
-    categories = res.data  # list of dicts
+    cat_res = supabase.table("categories").select("id, name").execute()
+    categories = cat_res.data or []
+    # Sort by name ascending
+    categories.sort(key=lambda c: c["name"].lower())
 except Exception as e:
     st.error(f"Could not load categories: {e}")
     st.stop()
 
-# Display and allow edit/delete for each category
+# List existing categories with inline edit/delete
 for cat in categories:
     col1, col2, col3 = st.columns([4, 1, 1])
     new_name = col1.text_input("", value=cat["name"], key=f"cat_name_{cat['id']}")
@@ -44,12 +40,12 @@ for cat in categories:
     if col3.button("Delete", key=f"delete_cat_{cat['id']}"):
         try:
             supabase.table("categories").delete().eq("id", cat["id"]).execute()
-            st.success(f"Category '{cat['name']}' deleted.")
+            st.success(f"Deleted category '{cat['name']}'.")
             st.experimental_rerun()
         except Exception as e:
             st.error(f"Error deleting category: {e}")
 
-# Add a new category
+# Add new category
 st.subheader("Add New Category")
 new_cat = st.text_input("Name", key="new_cat_name")
 if st.button("Add Category"):
@@ -85,7 +81,7 @@ else:
 
     if st.button("Assign Default Category"):
         try:
-            # Reload user details so we don’t overwrite other fields
+            # Reload user details so we preserve role & approver
             details = get_single_user_details(sel_user["id"])
             success = update_user_details(
                 sel_user["id"],
@@ -96,6 +92,6 @@ else:
             if success:
                 st.success(f"Default category for '{sel_user['name']}' set to '{sel_cat_name}'.")
             else:
-                st.error("Failed to update user — check the logs.")
+                st.error("Failed to update user—check the logs.")
         except Exception as e:
             st.error(f"Error assigning category: {e}")
