@@ -14,15 +14,14 @@ st.title("Category Management")
 supabase = init_connection()
 
 # --- 1) CATEGORY CRUD ---------------------------------------
-
 st.header("Manage Categories")
 
-# Fetch all categories
+# Fetch all categories, ordered ascending by name
 cat_res = (
     supabase
     .table("categories")
     .select("id, name")
-    .order("name", ascending=True)
+    .order("name", desc=False)  # ascending order; `ascending=True` is invalid :contentReference[oaicite:0]{index=0}
     .execute()
 )
 if cat_res.error:
@@ -57,7 +56,6 @@ if st.button("Add Category"):
 st.write("---")
 
 # --- 2) ASSIGN DEFAULT CATEGORY TO USER --------------------
-
 st.header("Assign Default Category to User")
 
 # Fetch users
@@ -77,7 +75,7 @@ else:
     sel_cat_id = next(c["id"] for c in categories if c["name"] == sel_cat_name)
 
     if st.button("Assign Default Category"):
-        # Pull full user details so we can preserve other fields
+        # Pull full user details so we preserve other fields
         details = get_single_user_details(sel_user["id"])
         ok = update_user_details(
             sel_user["id"],
