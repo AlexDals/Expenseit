@@ -9,40 +9,46 @@ from utils import supabase_utils as su
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# — Initialize Supabase client
+# Initialize Supabase client
 supabase = su.init_connection()
 
-# — Load list of reports
-reports = su.get_all_reports()  # returns List[Dict] with at least 'id', 'report_name', 'username'
-if not reports:
+# Load list of reports (could be a DataFrame or list of dicts)
+reports = su.get_all_reports()
+
+# Normalize to a list of dicts
+if hasattr(reports, "to_dict"):
+    reports_list = reports.to_dict("records")
+else:
+    reports_list = reports or []
+
+# Guard against empty
+if not reports_list:
     st.info("No reports found.")
     st.stop()
 
-# — Build dropdown with “filed by” context
+# Build dropdown with “filed by” context
 options = [
-    f"{r['report_name']} (filed by {r.get('username','Unknown')})"
-    for r in reports
+    f"{r['report_name']} (filed by {r.get('username', 'Unknown')})"
+    for r in reports_list
 ]
 selected = st.selectbox("Select a report", options, index=0)
-report = reports[options.index(selected)]
+report = reports_list[options.index(selected)]
 
-# — Show just the relevant columns in the grid
-items = su.get_report_items(report["id"])  # returns List[Dict]
-df_items = pd.DataFrame(items)
-if not df_items.empty:
-    display_df = df_items[["date", "vendor", "description", "amount"]]
+# Fetch and display only the relevant columns
+items = su.get_report_items(report["id"])  # returns list of dicts
+items_df = pd.DataFrame(items)
+if not items_df.empty:
+    display_df = items_df[["date", "vendor", "description", "amount"]]
     st.dataframe(display_df)
 else:
     st.write("No expense items found for this report.")
 
-# — Generate XML
+# Generate XML for download
 xml_data = su.generate_report_xml(report, items)
-# Convert to bytes if it’s a str
 xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
-
 clean_name = report["report_name"].replace(" ", "_")
 
-# — Download XML as bytes
+# Download XML
 st.download_button(
     label="💿 Download as XML",
     data=xml_bytes,
@@ -51,7 +57,7 @@ st.download_button(
     use_container_width=True,
 )
 
-# — Build a ZIP of all receipt files
+# Build ZIP of receipts
 zip_buf = io.BytesIO()
 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
     for item in items:
@@ -60,13 +66,11 @@ with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
             continue
         try:
             resp = supabase.storage.from_("receipts").download(path)
-            # Supabase-py v2 returns dict, v1 returns raw bytes
             file_bytes = resp.get("data") if isinstance(resp, dict) else resp
             if file_bytes:
                 fname = path.split("/")[-1]
                 zf.writestr(fname, file_bytes)
         except Exception:
-            # Skip files we can’t fetch
             pass
 
 zip_buf.seek(0)
