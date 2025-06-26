@@ -7,44 +7,45 @@ import zipfile
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
-    get_report_items,
-    generate_report_xml,  # or however you build your XML
+    get_expenses_for_report,
+    generate_report_xml,
 )
 
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# — Initialize Supabase client
+# 1) Supabase client
 supabase = init_connection()
 
-# — Load list of reports
-reports = get_all_reports()  # returns List[Dict] with at least 'id' and 'report_name'
-if not reports:
+# 2) Load all reports
+reports_df: pd.DataFrame = get_all_reports()
+if reports_df.empty:
     st.info("No reports found.")
     st.stop()
 
-# — Let user pick one
-report_df = pd.DataFrame(reports)
-report_names = report_df["report_name"].tolist()
-selected_name = st.selectbox("Select a report", report_names, index=0)
-selected_report = next(r for r in reports if r["report_name"] == selected_name)
+# 3) Let the user pick one
+report_names = reports_df["report_name"].tolist()
+selected_name = st.selectbox("Select a report", report_names)
+selected_idx = report_names.index(selected_name)
+selected_report = reports_df.iloc[selected_idx]  # pd.Series
 
-# — Show the items in the report
-items = get_report_items(selected_report["id"])  # returns List[Dict]
+# 4) Fetch expense items for that report
+items_df: pd.DataFrame = get_expenses_for_report(selected_report["id"])
 st.markdown("### Report Items")
-st.dataframe(pd.DataFrame(items))
+st.dataframe(items_df)
 
-# — Generate XML for this report
-xml_data = generate_report_xml(selected_report, items)
-# Ensure xml_data is bytes
-if isinstance(xml_data, str):
-    xml_bytes = xml_data.encode("utf-8")
-else:
-    xml_bytes = xml_data
+# 5) Build the XML
+#    generate_report_xml(report_series, items_df, submitter_name)
+#    We pull the submitter’s name from the nested 'user' dict if present
+user_field = selected_report.get("user")
+submitter_name = user_field.get("name") if isinstance(user_field, dict) else ""
+xml_obj = generate_report_xml(selected_report, items_df, submitter_name)
 
+# Ensure we have bytes for download_button
+xml_bytes = xml_obj.encode("utf-8") if isinstance(xml_obj, str) else xml_obj
 clean_name = selected_name.replace(" ", "_")
 
-# — Download XML
+# 6) Download as XML
 st.download_button(
     label="💿 Download as XML",
     data=xml_bytes,
@@ -53,31 +54,26 @@ st.download_button(
     use_container_width=True,
 )
 
-# — Create in-memory ZIP of all receipt files
+# 7) Build a ZIP of all receipt files
 zip_buffer = io.BytesIO()
 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-    for item in items:
-        path = item.get("receipt_path")
+    for _, row in items_df.iterrows():
+        path = row.get("receipt_path")
         if not path:
             continue
         try:
-            # Download from Supabase storage
             resp = supabase.storage.from_("receipts").download(path)
-            # Handle v1 (Response-like) and v2 (dict) clients
-            if isinstance(resp, dict):
-                file_bytes = resp.get("data")
-            else:
-                file_bytes = resp
-            if not file_bytes:
-                continue
-            # Use only the basename for the file inside the zip
-            filename = path.split("/")[-1]
-            zf.writestr(filename, file_bytes)
+            # supabase-py v2 returns {'data': bytes, 'error': None}, v1 returns raw bytes
+            file_bytes = resp.get("data") if isinstance(resp, dict) else resp
+            if file_bytes:
+                filename = path.split("/")[-1]
+                zf.writestr(filename, file_bytes)
         except Exception as e:
-            st.warning(f"Could not include {path} in ZIP: {e}")
+            st.warning(f"Could not include {path}: {e}")
 
 zip_buffer.seek(0)
-# — Download ZIP
+
+# 8) Download ZIP
 st.download_button(
     label="📦 Download Receipts ZIP",
     data=zip_buffer.read(),
