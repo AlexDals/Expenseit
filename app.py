@@ -45,8 +45,8 @@ view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", ico
 register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
 # --- NEW: Define the pages for the new User Management workflow ---
 users_page = st.Page("pages/6_Users.py", title="User Management", icon="⚙️")
-add_user_page = st.Page("pages/7_Add_User.py", title="Add User") # No icon to hide from sidebar
-edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User") # No icon to hide from sidebar
+-add_user_page = st.Page("pages/7_Add_User.py", title="Add User") # No icon to hide from sidebar
+-edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User") # No icon to hide from sidebar
 category_management_page = st.Page("pages/9_Category_Management.py", title="Category Management", icon="📈")
 
 
