@@ -7,7 +7,6 @@ import zipfile
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
-    get_all_reports,
     get_single_user_details,
     get_expenses_for_report,
 )
@@ -79,12 +78,21 @@ if not items_df.empty:
         vendor = row.get("vendor", "Item")
         amount = row.get("amount", "")
         with st.expander(f"{vendor} - {amount}"):
-            try:
-                # Normalize single dict to list
-                if isinstance(line_items, dict):
-                    li_df = pd.DataFrame([line_items])
+            # Normalize line_items into a list of dicts
+            if isinstance(line_items, dict):
+                data = [line_items]
+            elif isinstance(line_items, list):
+                # list of dicts?
+                if all(isinstance(x, dict) for x in line_items):
+                    data = line_items
                 else:
-                    li_df = pd.DataFrame(line_items)
+                    # list of primitives
+                    data = [{"value": x} for x in line_items]
+            else:
+                # single primitive
+                data = [{"value": line_items}]
+            try:
+                li_df = pd.DataFrame(data)
                 st.dataframe(li_df)
             except Exception as e:
                 st.error(f"Unable to display line items: {e}")
@@ -124,6 +132,7 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             pass
 
 zip_buffer.seek(0)
+
 st.download_button(
     label="📦 Download Receipts ZIP",
     data=zip_buffer.read(),
