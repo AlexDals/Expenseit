@@ -4,48 +4,45 @@ import streamlit as st
 import pandas as pd
 import io
 import zipfile
-from utils.supabase_utils import (
-    init_connection,
-    get_all_reports,
-    get_expenses_for_report,
-    generate_report_xml,
-)
+from utils import supabase_utils as su
 
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# 1) Supabase client
-supabase = init_connection()
+# — Initialize Supabase client
+supabase = su.init_connection()
 
-# 2) Load all reports
-reports_df: pd.DataFrame = get_all_reports()
-if reports_df.empty:
+# — Load list of reports
+reports = su.get_all_reports()  # returns List[Dict] with at least 'id', 'report_name', 'username'
+if not reports:
     st.info("No reports found.")
     st.stop()
 
-# 3) Let the user pick one
-report_names = reports_df["report_name"].tolist()
-selected_name = st.selectbox("Select a report", report_names)
-selected_idx = report_names.index(selected_name)
-selected_report = reports_df.iloc[selected_idx]  # pd.Series
+# — Build dropdown with “filed by” context
+options = [
+    f"{r['report_name']} (filed by {r.get('username','Unknown')})"
+    for r in reports
+]
+selected = st.selectbox("Select a report", options, index=0)
+report = reports[options.index(selected)]
 
-# 4) Fetch expense items for that report
-items_df: pd.DataFrame = get_expenses_for_report(selected_report["id"])
-st.markdown("### Report Items")
-st.dataframe(items_df)
+# — Show just the relevant columns in the grid
+items = su.get_report_items(report["id"])  # returns List[Dict]
+df_items = pd.DataFrame(items)
+if not df_items.empty:
+    display_df = df_items[["date", "vendor", "description", "amount"]]
+    st.dataframe(display_df)
+else:
+    st.write("No expense items found for this report.")
 
-# 5) Build the XML
-#    generate_report_xml(report_series, items_df, submitter_name)
-#    We pull the submitter’s name from the nested 'user' dict if present
-user_field = selected_report.get("user")
-submitter_name = user_field.get("name") if isinstance(user_field, dict) else ""
-xml_obj = generate_report_xml(selected_report, items_df, submitter_name)
+# — Generate XML
+xml_data = su.generate_report_xml(report, items)
+# Convert to bytes if it’s a str
+xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
 
-# Ensure we have bytes for download_button
-xml_bytes = xml_obj.encode("utf-8") if isinstance(xml_obj, str) else xml_obj
-clean_name = selected_name.replace(" ", "_")
+clean_name = report["report_name"].replace(" ", "_")
 
-# 6) Download as XML
+# — Download XML as bytes
 st.download_button(
     label="💿 Download as XML",
     data=xml_bytes,
@@ -54,29 +51,28 @@ st.download_button(
     use_container_width=True,
 )
 
-# 7) Build a ZIP of all receipt files
-zip_buffer = io.BytesIO()
-with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-    for _, row in items_df.iterrows():
-        path = row.get("receipt_path")
+# — Build a ZIP of all receipt files
+zip_buf = io.BytesIO()
+with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    for item in items:
+        path = item.get("receipt_path")
         if not path:
             continue
         try:
             resp = supabase.storage.from_("receipts").download(path)
-            # supabase-py v2 returns {'data': bytes, 'error': None}, v1 returns raw bytes
+            # Supabase-py v2 returns dict, v1 returns raw bytes
             file_bytes = resp.get("data") if isinstance(resp, dict) else resp
             if file_bytes:
-                filename = path.split("/")[-1]
-                zf.writestr(filename, file_bytes)
-        except Exception as e:
-            st.warning(f"Could not include {path}: {e}")
+                fname = path.split("/")[-1]
+                zf.writestr(fname, file_bytes)
+        except Exception:
+            # Skip files we can’t fetch
+            pass
 
-zip_buffer.seek(0)
-
-# 8) Download ZIP
+zip_buf.seek(0)
 st.download_button(
     label="📦 Download Receipts ZIP",
-    data=zip_buffer.read(),
+    data=zip_buf.read(),
     file_name=f"{clean_name}_receipts.zip",
     mime="application/zip",
     use_container_width=True,
