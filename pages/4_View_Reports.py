@@ -4,6 +4,7 @@ import streamlit as st
 import pandas as pd
 import io
 import zipfile
+import json
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
@@ -71,33 +72,39 @@ if not items_df.empty:
     # Show line items per expense
     st.markdown("---")
     st.subheader("Line Items Breakdown")
-    for _, row in items_df.iterrows():
-        line_items = row.get("line_items") or []
-        if not line_items:
+    for idx, row in items_df.iterrows():
+        raw_items = row.get("line_items")
+        # parse JSON string if necessary
+        if isinstance(raw_items, str):
+            try:
+                parsed = json.loads(raw_items)
+            except Exception:
+                parsed = []
+        elif isinstance(raw_items, list):
+            parsed = raw_items
+        else:
+            parsed = []
+        if not parsed:
             continue
         vendor = row.get("vendor", "Item")
         amount = row.get("amount", "")
         with st.expander(f"{vendor} - {amount}"):
-            # Prepare structured data for DataFrame
-            if isinstance(line_items, dict):
-                data = [line_items]
-            elif isinstance(line_items, list) and all(isinstance(x, dict) for x in line_items):
-                data = line_items
-            else:
-                # Handle primitives or mixed lists
-                primitives = line_items if isinstance(line_items, list) else [line_items]
-                data = []
-                for x in primitives:
-                    text = str(x)
-                    parts = text.rsplit(' ', 1)
-                    if len(parts) == 2 and parts[1].replace('.', '', 1).isdigit():
-                        desc, amt = parts
-                    else:
-                        desc = text
-                        amt = ''
-                    data.append({"Description": desc, "Amount": amt})
             try:
-                li_df = pd.DataFrame(data)
+                # create DataFrame
+                li_df = pd.DataFrame(parsed)
+                # Rename keys if needed
+                rename_map = {}
+                if "price" in li_df.columns:
+                    rename_map["price"] = "Price"
+                if "description" in li_df.columns:
+                    rename_map["description"] = "Description"
+                if "category" in li_df.columns:
+                    rename_map["category"] = "Category"
+                if "category_id" in li_df.columns:
+                    rename_map["category_id"] = "Category ID"
+                if "category_name" in li_df.columns:
+                    rename_map["category_name"] = "Category Name"
+                li_df = li_df.rename(columns=rename_map)
                 st.dataframe(li_df)
             except Exception as e:
                 st.error(f"Unable to display line items: {e}")
