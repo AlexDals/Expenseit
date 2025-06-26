@@ -7,6 +7,7 @@ import zipfile
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
+    get_all_reports,
     get_single_user_details,
     get_expenses_for_report,
 )
@@ -72,12 +73,21 @@ if not items_df.empty:
     st.markdown("---")
     st.subheader("Line Items Breakdown")
     for _, row in items_df.iterrows():
-        line_items = row.get("line_items")
-        if line_items:
-            vendor = row.get("vendor", "Item")
-            with st.expander(f"{vendor} - {row.get('amount')}"):
-                li_df = pd.DataFrame(line_items)
+        line_items = row.get("line_items") or []
+        if not line_items:
+            continue
+        vendor = row.get("vendor", "Item")
+        amount = row.get("amount", "")
+        with st.expander(f"{vendor} - {amount}"):
+            try:
+                # Normalize single dict to list
+                if isinstance(line_items, dict):
+                    li_df = pd.DataFrame([line_items])
+                else:
+                    li_df = pd.DataFrame(line_items)
                 st.dataframe(li_df)
+            except Exception as e:
+                st.error(f"Unable to display line items: {e}")
 else:
     st.write("No expense items found for this report.")
 
