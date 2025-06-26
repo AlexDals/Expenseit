@@ -7,18 +7,18 @@ import zipfile
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
+    get_single_user_details,
     get_expenses_for_report,
     generate_report_xml,
-    get_single_user_details,
 )
 
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# 1) Initialize Supabase
+# Initialize Supabase client
 supabase = init_connection()
 
-# 2) Load all reports
+# Load all reports
 reports_df = get_all_reports()
 if hasattr(reports_df, "to_dict"):
     reports = reports_df.to_dict("records")
@@ -29,53 +29,65 @@ if not reports:
     st.info("No reports found.")
     st.stop()
 
-# 3) Build dropdown with “filed by” using the nested user object or falling back to a lookup
+# Build dropdown with "filed by" labels
 labels = []
-for r in reports:
-    rpt_name = r.get("report_name", "Untitled")
-    # Supabase returns a “user” field because of the select("*, user:users!left(name)")
-    user_obj = r.get("user")
+for rpt in reports:
+    rpt_name = rpt.get("report_name", "Untitled")
+    filer = "Unknown"
+    user_obj = rpt.get("user")
     if isinstance(user_obj, dict) and user_obj.get("name"):
         filer = user_obj["name"]
     else:
-        # fallback: if there’s a user_id, fetch it
-        uid = r.get("user_id")
-        filer = "Unknown"
+        uid = rpt.get("user_id")
         if uid is not None:
-            user = get_single_user_details(uid)
-            filer = user.get("name", "Unknown") if user else "Unknown"
+            usr = get_single_user_details(uid)
+            filer = usr.get("name", "Unknown") if usr else "Unknown"
     labels.append(f"{rpt_name} (filed by {filer})")
 
 selected_label = st.selectbox("Select a report", labels, index=0)
-selected_idx = labels.index(selected_label)
-report = reports[selected_idx]
+report = reports[labels.index(selected_label)]
 
-# 4) Fetch and display only the key columns from that report’s expenses
+# Fetch expense items for that report
 items_df = get_expenses_for_report(report["id"])
+
+# Display only the core columns, dynamically handling column names
 if not items_df.empty:
-    # rename expense_date → Date for clarity, then select columns
-    disp = (
-        items_df
-        .rename(columns={"expense_date": "Date", "vendor": "Vendor", "description": "Description", "amount": "Amount"})
-        [["Date", "Vendor", "Description", "Amount"]]
-    )
-    st.dataframe(disp)
+    cols = list(items_df.columns)
+    # Determine date column
+    for c in ("date", "expense_date", "created_at"):
+        if c in cols:
+            date_col = c
+            break
+    else:
+        date_col = cols[0]
+    vendor_col = "vendor" if "vendor" in cols else (cols[1] if len(cols) > 1 else date_col)
+    desc_col = "description" if "description" in cols else (cols[2] if len(cols) > 2 else vendor_col)
+    amt_col = "amount" if "amount" in cols else ("total_amount" if "total_amount" in cols else (cols[3] if len(cols) > 3 else desc_col))
+
+    display_df = items_df[[date_col, vendor_col, desc_col, amt_col]].rename(columns={
+        date_col: "Date",
+        vendor_col: "Vendor",
+        desc_col: "Description",
+        amt_col: "Amount",
+    })
+    st.dataframe(display_df)
 else:
     st.write("No expense items found for this report.")
 
-# 5) Generate and download the XML
-xml_data = generate_report_xml(pd.Series(report), items_df, None)
+# Generate XML and ensure bytes for download
+xml_data = generate_report_xml(report, items_df)
 xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
-base = report.get("report_name", "report").replace(" ", "_")
+clean_name = report.get("report_name", "report").replace(" ", "_")
+
 st.download_button(
     label="💿 Download as XML",
     data=xml_bytes,
-    file_name=f"{base}.xml",
+    file_name=f"{clean_name}.xml",
     mime="application/xml",
     use_container_width=True,
 )
 
-# 6) Bundle all receipt files into a ZIP and offer it for download
+# Bundle receipts into ZIP
 zip_buffer = io.BytesIO()
 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
@@ -84,20 +96,18 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             continue
         try:
             resp = supabase.storage.from_("receipts").download(path)
-            # supabase-py v2 returns {'data': bytes, 'error': None}, v1 returns raw bytes
             file_bytes = resp.get("data") if isinstance(resp, dict) else resp
             if file_bytes:
-                name = path.split("/")[-1]
-                zf.writestr(name, file_bytes)
+                fname = path.split("/")[-1]
+                zf.writestr(fname, file_bytes)
         except Exception:
-            # skip missing or errored files
             pass
 
 zip_buffer.seek(0)
 st.download_button(
     label="📦 Download Receipts ZIP",
     data=zip_buffer.read(),
-    file_name=f"{base}_receipts.zip",
+    file_name=f"{clean_name}_receipts.zip",
     mime="application/zip",
     use_container_width=True,
 )
