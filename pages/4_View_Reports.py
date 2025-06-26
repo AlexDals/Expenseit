@@ -4,7 +4,6 @@ import streamlit as st
 import pandas as pd
 import io
 import zipfile
-import xml.etree.ElementTree as ET
 from utils.supabase_utils import (
     init_connection,
     get_all_reports,
@@ -30,10 +29,10 @@ if not reports:
     st.info("No reports found.")
     st.stop()
 
-# Build dropdown with “filed by”
+# Build dropdown with “filed by” context
 labels = []
 for rpt in reports:
-    name = rpt.get("report_name", "Untitled")
+    rpt_name = rpt.get("report_name", "Untitled")
     user_obj = rpt.get("user")
     if isinstance(user_obj, dict) and user_obj.get("name"):
         filer = user_obj["name"]
@@ -44,12 +43,12 @@ for rpt in reports:
             filer = usr.get("name", "Unknown") if usr else "Unknown"
         else:
             filer = "Unknown"
-    labels.append(f"{name} (filed by {filer})")
+    labels.append(f"{rpt_name} (filed by {filer})")
 
 selected = st.selectbox("Select a report", labels, index=0)
 report = reports[labels.index(selected)]
 
-# Fetch items and show only the key columns
+# Fetch and display only the four key columns
 items_df = get_expenses_for_report(report["id"])
 if not items_df.empty:
     df = items_df.rename(columns={
@@ -67,18 +66,28 @@ else:
 # Prepare base filename
 base_name = report.get("report_name", "report").replace(" ", "_")
 
-# Generate XML and normalize to bytes
+# — Export as Excel
+if not items_df.empty:
+    excel_buffer = io.BytesIO()
+    display_df.to_excel(excel_buffer, index=False, sheet_name="Report")
+    excel_buffer.seek(0)
+    st.download_button(
+        label="📊 Export as Excel",
+        data=excel_buffer.read(),
+        file_name=f"{base_name}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+# — Generate XML and force to bytes
 try:
     report_series = pd.Series(report)
-    raw_xml = generate_report_xml(report_series, items_df, selected.split("filed by ")[1].rstrip(")"))
+    submitter = selected.split("filed by ")[1].rstrip(")")
+    raw_xml = generate_report_xml(report_series, items_df, submitter)
     if isinstance(raw_xml, bytes):
         xml_bytes = raw_xml
-    elif isinstance(raw_xml, str):
-        xml_bytes = raw_xml.encode("utf-8")
-    elif isinstance(raw_xml, ET.Element):
-        xml_bytes = ET.tostring(raw_xml, encoding="utf-8")
     else:
-        xml_bytes = str(raw_xml).encode("utf-8")
+        xml_bytes = raw_xml.encode("utf-8")
     st.download_button(
         label="💿 Download as XML",
         data=xml_bytes,
@@ -89,7 +98,7 @@ try:
 except Exception as e:
     st.error(f"Error preparing XML download: {e}")
 
-# Build ZIP of receipts
+# — Bundle receipts into ZIP for download
 zip_buf = io.BytesIO()
 with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
@@ -103,7 +112,7 @@ with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
                 filename = path.split("/")[-1]
                 zf.writestr(filename, file_bytes)
         except Exception:
-            continue
+            pass
 
 zip_buf.seek(0)
 st.download_button(
