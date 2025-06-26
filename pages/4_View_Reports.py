@@ -51,7 +51,7 @@ filer_name = filer_map[report["id"]]
 # Fetch expense items for that report
 items_df = get_expenses_for_report(report["id"])
 
-# Display full details including taxes and line items
+# Display full details including taxes
 if not items_df.empty:
     # Rename columns for display
     df = items_df.rename(columns={
@@ -68,56 +68,61 @@ if not items_df.empty:
     display_cols = ["Date", "Vendor", "Description", "Amount", "GST/TPS", "PST/QST", "HST/TVH"]
     display_df = df[display_cols]
     st.dataframe(display_df)
-
-    # Show line items per expense
-    st.markdown("---")
-    st.subheader("Line Items Breakdown")
-    for idx, row in items_df.iterrows():
-        raw_items = row.get("line_items")
-        # parse JSON string if necessary
-        if isinstance(raw_items, str):
-            try:
-                parsed = json.loads(raw_items)
-            except Exception:
-                parsed = []
-        elif isinstance(raw_items, list):
-            parsed = raw_items
-        else:
-            parsed = []
-        if not parsed:
-            continue
-        vendor = row.get("vendor", "Item")
-        amount = row.get("amount", "")
-        with st.expander(f"{vendor} - {amount}"):
-            try:
-                # create DataFrame
-                li_df = pd.DataFrame(parsed)
-                # Rename keys if needed
-                rename_map = {}
-                if "price" in li_df.columns:
-                    rename_map["price"] = "Price"
-                if "description" in li_df.columns:
-                    rename_map["description"] = "Description"
-                if "category" in li_df.columns:
-                    rename_map["category"] = "Category"
-                if "category_id" in li_df.columns:
-                    rename_map["category_id"] = "Category ID"
-                if "category_name" in li_df.columns:
-                    rename_map["category_name"] = "Category Name"
-                li_df = li_df.rename(columns=rename_map)
-                st.dataframe(li_df)
-            except Exception as e:
-                st.error(f"Unable to display line items: {e}")
 else:
     st.write("No expense items found for this report.")
 
-# Base filename
+# Prepare base filename
 base_name = report.get("report_name", "report").replace(" ", "_")
 
-# Export as Excel
+# Export as Excel with all details
 if not items_df.empty:
     excel_buffer = io.BytesIO()
-    display_df.to_excel(excel_buffer, index=False, sheet_name="Report")
+    # Write multiple sheets: Summary and Line Items
+    with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+        # Summary sheet: all expense item fields
+        df.to_excel(writer, sheet_name='Summary', index=False)
+
+        # Line Items sheet: flatten nested items
+        all_lines = []
+        for _, row in items_df.iterrows():
+            raw_items = row.get('line_items')
+            # parse JSON string
+            if isinstance(raw_items, str):
+                try:
+                    parsed = json.loads(raw_items)
+                except Exception:
+                    parsed = []
+            elif isinstance(raw_items, list):
+                parsed = raw_items
+            else:
+                parsed = []
+            for item in parsed:
+                if isinstance(item, dict):
+                    line = item.copy()
+                else:
+                    line = {'value': item}
+                # add parent expense context
+                line['Parent Expense Date'] = row.get('expense_date') or row.get('date')
+                line['Parent Vendor'] = row.get('vendor')
+                line['Parent Total Amount'] = row.get('amount')
+                all_lines.append(line)
+        if all_lines:
+            lines_df = pd.DataFrame(all_lines)
+            # Rename common keys for clarity
+            rename_map = {}
+            if 'description' in lines_df.columns:
+                rename_map['description'] = 'Line Description'
+            if 'price' in lines_df.columns:
+                rename_map['price'] = 'Line Price'
+            if 'category' in lines_df.columns:
+                rename_map['category'] = 'Line Category'
+            if 'category_id' in lines_df.columns:
+                rename_map['category_id'] = 'Line Category ID'
+            if 'category_name' in lines_df.columns:
+                rename_map['category_name'] = 'Line Category Name'
+            if rename_map:
+                lines_df = lines_df.rename(columns=rename_map)
+            lines_df.to_excel(writer, sheet_name='Line Items', index=False)
     excel_buffer.seek(0)
     st.download_button(
         label="📊 Export as Excel",
