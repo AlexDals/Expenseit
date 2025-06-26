@@ -16,30 +16,38 @@ supabase = init_connection()
 # --- 1) CATEGORY CRUD ---------------------------------------
 st.header("Manage Categories")
 
-# Fetch all categories (no .order), then sort locally
+# Load categories (including gl_account) and sort locally
 try:
-    cat_res = supabase.table("categories").select("id, name").execute()
-    categories = cat_res.data or []
-    # Sort by name ascending
+    res = supabase.table("categories").select("id, name, gl_account").execute()
+    categories = res.data or []
     categories.sort(key=lambda c: c["name"].lower())
 except Exception as e:
     st.error(f"Could not load categories: {e}")
     st.stop()
 
-# List existing categories with inline edit/delete
+# Display existing categories with inline edit/delete
 for cat in categories:
-    col1, col2, col3 = st.columns([4, 1, 1])
+    col1, col2, col3, col4 = st.columns([3, 3, 1, 1])
     new_name = col1.text_input("", value=cat["name"], key=f"cat_name_{cat['id']}")
-    if col2.button("Update", key=f"update_cat_{cat['id']}"):
+    new_gl = col2.text_input(
+        "GL Account Number", value=cat.get("gl_account", ""), key=f"cat_gl_{cat['id']}"
+    )
+    if col3.button("Update", key=f"update_cat_{cat['id']}"):
         try:
-            supabase.table("categories").update({"name": new_name}).eq("id", cat["id"]).execute()
-            st.success(f"Category renamed to '{new_name}'.")
+            supabase.table("categories")\
+                .update({"name": new_name, "gl_account": new_gl})\
+                .eq("id", cat["id"])\
+                .execute()
+            st.success(f"Category '{new_name}' updated.")
             st.experimental_rerun()
         except Exception as e:
             st.error(f"Error updating category: {e}")
-    if col3.button("Delete", key=f"delete_cat_{cat['id']}"):
+    if col4.button("Delete", key=f"delete_cat_{cat['id']}"):
         try:
-            supabase.table("categories").delete().eq("id", cat["id"]).execute()
+            supabase.table("categories")\
+                .delete()\
+                .eq("id", cat["id"])\
+                .execute()
             st.success(f"Deleted category '{cat['name']}'.")
             st.experimental_rerun()
         except Exception as e:
@@ -47,14 +55,17 @@ for cat in categories:
 
 # Add new category
 st.subheader("Add New Category")
-new_cat = st.text_input("Name", key="new_cat_name")
+new_cat_name = st.text_input("Name", key="new_cat_name")
+new_cat_gl = st.text_input("GL Account Number", key="new_cat_gl")
 if st.button("Add Category"):
-    if not new_cat:
+    if not new_cat_name:
         st.error("Please enter a category name.")
     else:
         try:
-            supabase.table("categories").insert({"name": new_cat}).execute()
-            st.success(f"Added new category '{new_cat}'.")
+            supabase.table("categories")\
+                .insert({"name": new_cat_name, "gl_account": new_cat_gl})\
+                .execute()
+            st.success(f"Added new category '{new_cat_name}'.")
             st.experimental_rerun()
         except Exception as e:
             st.error(f"Error adding category: {e}")
@@ -81,17 +92,4 @@ else:
 
     if st.button("Assign Default Category"):
         try:
-            # Reload user details so we preserve role & approver
-            details = get_single_user_details(sel_user["id"])
-            success = update_user_details(
-                sel_user["id"],
-                role=details["role"],
-                approver_id=details.get("approver_id"),
-                default_category_id=sel_cat_id,
-            )
-            if success:
-                st.success(f"Default category for '{sel_user['name']}' set to '{sel_cat_name}'.")
-            else:
-                st.error("Failed to update user—check the logs.")
-        except Exception as e:
-            st.error(f"Error assigning category: {e}")
+            details = get_single_user_details(_
