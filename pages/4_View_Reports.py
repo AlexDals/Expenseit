@@ -15,10 +15,10 @@ from utils.supabase_utils import (
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# Initialize Supabase client
+# 1) Initialize Supabase client
 supabase = init_connection()
 
-# Load all reports
+# 2) Load all reports
 reports_df = get_all_reports()
 if hasattr(reports_df, "to_dict"):
     reports = reports_df.to_dict("records")
@@ -29,31 +29,35 @@ if not reports:
     st.info("No reports found.")
     st.stop()
 
-# Build dropdown with "filed by" labels
+# 3) Build dropdown with “filed by” labels
 labels = []
+submitter_map = {}
 for rpt in reports:
-    rpt_name = rpt.get("report_name", "Untitled")
-    filer = "Unknown"
+    name = rpt.get("report_name", "Untitled")
+    # Prefer the nested user dict if present
     user_obj = rpt.get("user")
     if isinstance(user_obj, dict) and user_obj.get("name"):
         filer = user_obj["name"]
     else:
+        # Fallback: look up by user_id
         uid = rpt.get("user_id")
         if uid is not None:
             usr = get_single_user_details(uid)
             filer = usr.get("name", "Unknown") if usr else "Unknown"
-    labels.append(f"{rpt_name} (filed by {filer})")
+        else:
+            filer = "Unknown"
+    labels.append(f"{name} (filed by {filer})")
+    submitter_map[rpt["id"]] = filer
 
-selected_label = st.selectbox("Select a report", labels, index=0)
-report = reports[labels.index(selected_label)]
+selected = st.selectbox("Select a report", labels, index=0)
+report = reports[labels.index(selected)]
+submitter_name = submitter_map.get(report["id"], "")
 
-# Fetch expense items for that report
+# 4) Fetch expense items and display only the core columns
 items_df = get_expenses_for_report(report["id"])
-
-# Display only the core columns, dynamically handling column names
 if not items_df.empty:
     cols = list(items_df.columns)
-    # Determine date column
+    # Heuristically pick columns
     for c in ("date", "expense_date", "created_at"):
         if c in cols:
             date_col = c
@@ -74,22 +78,29 @@ if not items_df.empty:
 else:
     st.write("No expense items found for this report.")
 
-# Generate XML and ensure bytes for download
-xml_data = generate_report_xml(report, items_df)
-xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
-clean_name = report.get("report_name", "report").replace(" ", "_")
+# 5) Generate XML (pass all three args, per the supabase_utils signature)
+#    Wrap report dict in a Series and supply submitter_name
+xml_bytes = None
+try:
+    report_series = pd.Series(report)
+    xml_data = generate_report_xml(report_series, items_df, submitter_name)
+    xml_bytes = xml_data.encode("utf-8") if isinstance(xml_data, str) else xml_data
+except Exception as e:
+    st.error(f"Error generating XML: {e}")
 
-st.download_button(
-    label="💿 Download as XML",
-    data=xml_bytes,
-    file_name=f"{clean_name}.xml",
-    mime="application/xml",
-    use_container_width=True,
-)
+if xml_bytes:
+    clean_name = report.get("report_name", "report").replace(" ", "_")
+    st.download_button(
+        label="💿 Download as XML",
+        data=xml_bytes,
+        file_name=f"{clean_name}.xml",
+        mime="application/xml",
+        use_container_width=True,
+    )
 
-# Bundle receipts into ZIP
-zip_buffer = io.BytesIO()
-with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+# 6) Bundle receipts into a ZIP for download
+zip_buf = io.BytesIO()
+with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
         path = row.get("receipt_path")
         if not path:
@@ -102,11 +113,11 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
                 zf.writestr(fname, file_bytes)
         except Exception:
             pass
+zip_buf.seek(0)
 
-zip_buffer.seek(0)
 st.download_button(
     label="📦 Download Receipts ZIP",
-    data=zip_buffer.read(),
+    data=zip_buf.read(),
     file_name=f"{clean_name}_receipts.zip",
     mime="application/zip",
     use_container_width=True,
