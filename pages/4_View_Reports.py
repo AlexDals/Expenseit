@@ -31,24 +31,26 @@ if not reports:
 
 # Build dropdown with “filed by” context
 labels = []
+filer_map = {}
 for rpt in reports:
-    rpt_name = rpt.get("report_name", "Untitled")
+    name = rpt.get("report_name", "Untitled")
     user_obj = rpt.get("user")
     if isinstance(user_obj, dict) and user_obj.get("name"):
         filer = user_obj["name"]
     else:
         uid = rpt.get("user_id")
+        filer = "Unknown"
         if uid is not None:
             usr = get_single_user_details(uid)
             filer = usr.get("name", "Unknown") if usr else "Unknown"
-        else:
-            filer = "Unknown"
-    labels.append(f"{rpt_name} (filed by {filer})")
+    labels.append(f"{name} (filed by {filer})")
+    filer_map[rpt["id"]] = filer
 
 selected = st.selectbox("Select a report", labels, index=0)
 report = reports[labels.index(selected)]
+filer_name = filer_map[report["id"]]
 
-# Fetch and display only the four key columns
+# Fetch and display only the core columns
 items_df = get_expenses_for_report(report["id"])
 if not items_df.empty:
     df = items_df.rename(columns={
@@ -79,15 +81,22 @@ if not items_df.empty:
         use_container_width=True,
     )
 
-# — Generate XML and force to bytes
+# — Generate XML, guard against None
+xml_data = None
 try:
     report_series = pd.Series(report)
-    submitter = selected.split("filed by ")[1].rstrip(")")
-    raw_xml = generate_report_xml(report_series, items_df, submitter)
-    if isinstance(raw_xml, bytes):
-        xml_bytes = raw_xml
+    xml_data = generate_report_xml(report_series, items_df, filer_name)
+except Exception as e:
+    st.error(f"Error generating XML: {e}")
+
+if xml_data is not None:
+    if isinstance(xml_data, str):
+        xml_bytes = xml_data.encode("utf-8")
+    elif isinstance(xml_data, bytes):
+        xml_bytes = xml_data
     else:
-        xml_bytes = raw_xml.encode("utf-8")
+        # fallback: convert to string then bytes
+        xml_bytes = str(xml_data).encode("utf-8")
     st.download_button(
         label="💿 Download as XML",
         data=xml_bytes,
@@ -95,12 +104,12 @@ try:
         mime="application/xml",
         use_container_width=True,
     )
-except Exception as e:
-    st.error(f"Error preparing XML download: {e}")
+else:
+    st.warning("XML export unavailable for this report.")
 
 # — Bundle receipts into ZIP for download
-zip_buf = io.BytesIO()
-with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+zip_buffer = io.BytesIO()
+with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
         path = row.get("receipt_path")
         if not path:
@@ -114,10 +123,10 @@ with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
         except Exception:
             pass
 
-zip_buf.seek(0)
+zip_buffer.seek(0)
 st.download_button(
     label="📦 Download Receipts ZIP",
-    data=zip_buf.read(),
+    data=zip_buffer.read(),
     file_name=f"{base_name}_receipts.zip",
     mime="application/zip",
     use_container_width=True,
