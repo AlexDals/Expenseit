@@ -78,19 +78,24 @@ if not items_df.empty:
         vendor = row.get("vendor", "Item")
         amount = row.get("amount", "")
         with st.expander(f"{vendor} - {amount}"):
-            # Normalize line_items into a list of dicts
+            # Prepare structured data for DataFrame
             if isinstance(line_items, dict):
                 data = [line_items]
-            elif isinstance(line_items, list):
-                # list of dicts?
-                if all(isinstance(x, dict) for x in line_items):
-                    data = line_items
-                else:
-                    # list of primitives
-                    data = [{"value": x} for x in line_items]
+            elif isinstance(line_items, list) and all(isinstance(x, dict) for x in line_items):
+                data = line_items
             else:
-                # single primitive
-                data = [{"value": line_items}]
+                # Handle primitives or mixed lists
+                primitives = line_items if isinstance(line_items, list) else [line_items]
+                data = []
+                for x in primitives:
+                    text = str(x)
+                    parts = text.rsplit(' ', 1)
+                    if len(parts) == 2 and parts[1].replace('.', '', 1).isdigit():
+                        desc, amt = parts
+                    else:
+                        desc = text
+                        amt = ''
+                    data.append({"Description": desc, "Amount": amt})
             try:
                 li_df = pd.DataFrame(data)
                 st.dataframe(li_df)
@@ -132,7 +137,6 @@ with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             pass
 
 zip_buffer.seek(0)
-
 st.download_button(
     label="📦 Download Receipts ZIP",
     data=zip_buffer.read(),
