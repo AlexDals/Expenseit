@@ -14,10 +14,10 @@ from utils.supabase_utils import (
 st.set_page_config(page_title="View Reports", layout="wide")
 st.title("View Reports")
 
-# 1) Init Supabase
+# ─── Init Supabase ─────────────────────────────────────────
 supabase = init_connection()
 
-# 2) Load reports
+# ─── Load Reports ──────────────────────────────────────────
 reports_df = get_all_reports()
 if hasattr(reports_df, "to_dict"):
     reports = reports_df.to_dict("records")
@@ -28,7 +28,7 @@ if not reports:
     st.info("No reports found.")
     st.stop()
 
-# 3) Build dropdown with “filed by”
+# ─── Report Picker ─────────────────────────────────────────
 labels = []
 for rpt in reports:
     name = rpt.get("report_name", "Untitled")
@@ -37,59 +37,62 @@ for rpt in reports:
         filer = user_obj["name"]
     else:
         uid = rpt.get("user_id")
+        filer = "Unknown"
         if uid is not None:
             usr = get_single_user_details(uid)
             filer = usr.get("name", "Unknown") if usr else "Unknown"
-        else:
-            filer = "Unknown"
     labels.append(f"{name} (filed by {filer})")
 
 selected = st.selectbox("Select a report", labels, index=0)
 report = reports[labels.index(selected)]
 
-# 4) Fetch and display only the core columns
+# ─── Fetch & Display Core Columns ─────────────────────────
 items_df = get_expenses_for_report(report["id"])
 if not items_df.empty:
     df = items_df.rename(columns={
-        "expense_date": "Date",
-        "date": "Date",
-        "vendor": "Vendor",
-        "description": "Description",
-        "amount": "Amount",
+        "expense_date":   "Date",
+        "vendor":         "Vendor",
+        "description":    "Description",
+        "amount":         "Amount",
+        "gst_amount":     "GST",
+        "pst_amount":     "PST",
+        "hst_amount":     "HST",
     })
-    display_df = df[["Date", "Vendor", "Description", "Amount"]]
+    display_df = df[["Date", "Vendor", "Description", "Amount", "GST", "PST", "HST"]]
     st.dataframe(display_df)
 else:
     st.write("No expense items found for this report.")
 
-# 5) Prepare base filename
+# ─── Base Filename ─────────────────────────────────────────
 base_name = report.get("report_name", "report").replace(" ", "_")
 
-# 6) Export as Excel (fixed to use openpyxl)
+# ─── Export as Excel ───────────────────────────────────────
 if not items_df.empty:
     excel_buffer = io.BytesIO()
-    # Use openpyxl instead of xlsxwriter
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         # Summary sheet
         display_df.to_excel(writer, index=False, sheet_name="Summary")
-        # Line Items sheet
-        # Flatten all line_items into a detail table
-        all_li = []
-        for _, row in items_df.iterrows():
-            for li in row.get("line_items", []):
-                all_li.append({
-                    "Parent Expense Date": row.get("date", row.get("expense_date")),
-                    "Parent Vendor": row.get("vendor"),
-                    "Parent Total Amount": row.get("amount"),
-                    "Description": li.get("description"),
-                    "Price": li.get("price"),
-                    "Category": li.get("category_name"),
-                    "Category ID": li.get("category_id"),
-                })
-        if all_li:
-            pd.DataFrame(all_li).to_excel(writer, index=False, sheet_name="Line Items")
-    excel_buffer.seek(0)
 
+        # Line Items sheet
+        detail_rows = []
+        for _, row in items_df.iterrows():
+            parent_date   = row.get("date") or row.get("expense_date")
+            parent_vendor = row.get("vendor")
+            for li in row.get("line_items", []):
+                detail_rows.append({
+                    "Parent Date":   parent_date,
+                    "Parent Vendor": parent_vendor,
+                    "Description":   li.get("description"),
+                    "Price":         li.get("price"),
+                    "Category":      li.get("category_name"),
+                    "Category ID":   li.get("category_id"),
+                })
+        if detail_rows:
+            pd.DataFrame(detail_rows).to_excel(
+                writer, index=False, sheet_name="Line Items"
+            )
+
+    excel_buffer.seek(0)
     st.download_button(
         label="📊 Export as Excel",
         data=excel_buffer.read(),
@@ -98,7 +101,7 @@ if not items_df.empty:
         use_container_width=True,
     )
 
-# 7) Bundle receipts into ZIP
+# ─── Download Receipts ZIP ─────────────────────────────────  
 zip_buffer = io.BytesIO()
 with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
     for _, row in items_df.iterrows():
