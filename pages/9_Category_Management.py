@@ -8,10 +8,10 @@ from utils.nav_utils import PAGES_FOR_ROLES
 # Page config
 st.set_page_config(page_title="Category Management", layout="wide")
 
-# Hide built-in nav and apply global CSS
+# Hide built-in nav & apply global CSS
 hide_streamlit_pages_nav()
 
-# --- Sidebar Navigation (role-based) ---
+# Sidebar – role‐based
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
@@ -20,15 +20,14 @@ for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
     if st.sidebar.button(label):
         st.switch_page(f"pages/{fname}")
 
-# --- Authentication Guard ---
+# Auth guard
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
 
-# Initialize Supabase
 supabase = init_connection()
 
-# --- 1) CATEGORY CRUD ---
+# Manage Categories
 st.header("Manage Categories")
 try:
     resp       = supabase.table("categories").select("id, name, gl_account").order("name", desc=False).execute()
@@ -37,10 +36,10 @@ except Exception as e:
     st.error(f"Error loading categories: {e}")
     st.stop()
 
-# Display each category in a row of 4 columns:
-# [Category Name] [GL Account] [Update] [Delete]
+# Loop through categories, aligning inputs and buttons
 for cat in categories:
-    col_name, col_gl, col_update, col_delete = st.columns([3, 3, 1, 1])
+    col_name, col_gl, col_actions = st.columns([4, 3, 2])
+    # Inputs side by side
     new_name = col_name.text_input(
         "Category Name",
         value=cat["name"],
@@ -51,29 +50,30 @@ for cat in categories:
         value=cat.get("gl_account", ""),
         key=f"cat_gl_{cat['id']}"
     )
-
-    if col_update.button("Update", key=f"update_cat_{cat['id']}"):
-        try:
-            supabase.table("categories") \
-                    .update({"name": new_name, "gl_account": new_gl}) \
-                    .eq("id", cat["id"]) \
-                    .execute()
-            st.success(f"Renamed '{cat['name']}' → '{new_name}' (GL: {new_gl}).")
-            st.experimental_rerun()
-        except Exception as ex:
-            st.error(f"Error updating category: {ex}")
-
-    if col_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
-        try:
-            supabase.table("categories").delete().eq("id", cat["id"]).execute()
-            st.success(f"Deleted category '{cat['name']}'.")
-            st.experimental_rerun()
-        except Exception as ex:
-            st.error(f"Error deleting category: {ex}")
+    # Buttons aligned in a sub‐column
+    with col_actions:
+        btn_update, btn_delete = st.columns([1, 1], gap="small")
+        if btn_update.button("Update", key=f"update_cat_{cat['id']}"):
+            try:
+                supabase.table("categories") \
+                        .update({"name": new_name, "gl_account": new_gl}) \
+                        .eq("id", cat["id"]) \
+                        .execute()
+                st.success(f"Updated '{cat['name']}' → '{new_name}'.")
+                st.experimental_rerun()
+            except Exception as ex:
+                st.error(f"Error updating category: {ex}")
+        if btn_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
+            try:
+                supabase.table("categories").delete().eq("id", cat["id"]).execute()
+                st.success(f"Deleted category '{cat['name']}'.")
+                st.experimental_rerun()
+            except Exception as ex:
+                st.error(f"Error deleting category: {ex}")
 
 st.markdown("---")
 
-# --- 2) ASSIGN DEFAULT CATEGORY TO USER ---
+# Assign Default Category
 st.header("Assign Default Category to User")
 users_df = get_all_users()
 users    = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
@@ -84,7 +84,6 @@ else:
     user_labels    = [f"{u['name']} ({u['username']})" for u in users]
     sel_user_label = st.selectbox("Select User", options=user_labels, key="assign_user")
     sel_user       = users[user_labels.index(sel_user_label)]
-
     cat_labels     = [c["name"] for c in categories]
     sel_cat_name   = st.selectbox("Select Default Category", options=cat_labels, key="assign_cat")
     sel_cat_id     = next(c["id"] for c in categories if c["name"] == sel_cat_name)
