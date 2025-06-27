@@ -1,10 +1,13 @@
+# File: pages/6_Users.py
+
 import streamlit as st
-from utils.nav_utils import filter_pages_by_role
-filter_pages_by_role()
-
 from utils.supabase_utils import get_all_users
+from utils.ui_utils import hide_streamlit_pages_nav
 
-st.set_page_config(layout="wide", page_title="User Management")
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="User Management", layout="wide")
 st.title("User Management")
 
 if not st.session_state.get("authentication_status"):
@@ -21,8 +24,8 @@ if not users:
     st.info("No users found.")
 else:
     for u in users:
-        c1, c2 = st.columns([4,1])
-        if c1.button(f"✏️ {u['name']} (`{u['username']}`)", key=u["id"]):
+        c1, c2 = st.columns([4, 1])
+        if c1.button(f"✏️ {u['name']} (`{u['username']}`)", key=f"edit_{u['id']}"):
             st.session_state["selected_user_id"] = u["id"]
             st.switch_page("pages/8_Edit_User.py")
-        c2.markdown(f"**Role:** `{u.get('role','')}`")
+        c2.markdown(f"**Role:** `{u.get('role', '')}`")
