@@ -7,7 +7,7 @@ PAGES_FOR_ROLES = {
         ("View Reports",          "4_View_Reports.py"),
         ("User Management",       "6_Users.py"),
         ("Category Management",   "9_Category_Management.py"),
-        ("Department Maintenance","9_Department_Maintenance.py"),
+        ("Department Maintenance","10_Department_Maintenance.py"),
         ("Add User",              "7_Add_User.py"),
         ("Edit User",             "8_Edit_User.py"),
     ],
@@ -28,13 +28,18 @@ PAGES_FOR_ROLES = {
 }
 
 def filter_pages_by_role():
+    """
+    Prune Streamlit's built-in pages list so that only pages in
+    PAGES_FOR_ROLES[current_role] are shown in the sidebar.
+    Must be called at the top of every page.
+    """
     role = st.session_state.get("role", "logged_out")
     allowed = {fname for (_lbl, fname) in PAGES_FOR_ROLES.get(role, [])}
 
     pages = st.experimental_get_pages()
     filtered = {
-        name: info
-        for name, info in pages.items()
-        if info.path.rsplit("/", 1)[-1] in allowed
+        page_name: info
+        for page_name, info in pages.items()
+        if info.path.split("/")[-1] in allowed
     }
     st.experimental_set_pages(filtered)
