@@ -37,18 +37,7 @@ if st.session_state.get("authentication_status"):
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
 
-# Define all pages
-login_page = st.Page("pages/1_Login.py", title="Login", icon="🔑", default=(not is_logged_in))
-dashboard_page = st.Page("pages/2_Dashboard.py", title="Dashboard", icon="🏠", default=is_logged_in)
-new_report_page = st.Page("pages/3_New_Report.py", title="New Report", icon="📄")
-view_reports_page = st.Page("pages/4_View_Reports.py", title="View Reports", icon="🗂️")
-register_page = st.Page("pages/5_Register.py", title="Register", icon="🔑")
-# --- NEW: Define the pages for the new User Management workflow ---
-users_page = st.Page("pages/6_Users.py", title="User Management", icon="⚙️")
--# manually register pages (now obsolete)
--add_user_page = st.Page("pages/7_Add_User.py", title="Add User")
--edit_user_page = st.Page("pages/8_Edit_User.py", title="Edit User")
-category_management_page = st.Page("pages/9_Category_Management.py", title="Category Management", icon="📈")
+
 
 
 # Build the navigation dictionary based on role
