@@ -47,14 +47,14 @@ PAGES_FOR_ROLES = {
         ("Edit User",           "_8_Edit_User.py"),
     ],
     "approver": [
-        ("Dashboard",   "2_Dashboard.py"),
-        ("New Report",  "3_New_Report.py"),
-        ("View Reports","4_View_Reports.py"),
+        ("Dashboard",    "2_Dashboard.py"),
+        ("New Report",   "3_New_Report.py"),
+        ("View Reports", "4_View_Reports.py"),
     ],
     "user": [
-        ("Dashboard",   "2_Dashboard.py"),
-        ("New Report",  "3_New_Report.py"),
-        ("View Reports","4_View_Reports.py"),
+        ("Dashboard",    "2_Dashboard.py"),
+        ("New Report",   "3_New_Report.py"),
+        ("View Reports", "4_View_Reports.py"),
     ],
     "logged_out": [
         ("Login",    "1_Login.py"),
@@ -66,10 +66,10 @@ PAGES_FOR_ROLES = {
 is_logged_in = st.session_state.get("authentication_status", False)
 role = st.session_state.get("role", "logged_out")
 
-# --- BUILD NAVIGATION MENU BASED ON ROLE ---
+# --- BUILD SIDEBAR NAVIGATION BASED ON ROLE ---
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
-    # hide any file starting with "_" 
+    # skip hidden pages (underscore‐prefixed)
     if fname.startswith("_"):
         continue
     if st.sidebar.button(label):
