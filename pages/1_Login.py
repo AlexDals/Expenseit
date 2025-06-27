@@ -28,8 +28,8 @@ if "authenticator" not in st.session_state:
 
 authenticator = st.session_state["authenticator"]
 
-# Show login form in the main area (use "main" as the location name)
-name, auth_status, username = authenticator.login("Login", "main")
+# Render login form in the main area (location must be 'main', 'sidebar', or 'unrendered')
+name, auth_status, username = authenticator.login(location="main")
 
 if auth_status:
     # Store user info & redirect
