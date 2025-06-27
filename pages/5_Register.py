@@ -3,6 +3,12 @@ import streamlit_authenticator as stauth
 import re
 from utils import supabase_utils as su
 import bcrypt
+from utils.ui_utils import hide_streamlit_pages_nav
+
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="Login", layout="wide")
 
 # The redundant st.set_page_config() call has been removed.
 st.title("Register New User")
