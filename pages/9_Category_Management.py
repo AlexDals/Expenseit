@@ -5,10 +5,7 @@ from utils.supabase_utils import init_connection, get_all_users, get_single_user
 from utils.ui_utils import hide_streamlit_pages_nav
 from utils.nav_utils import PAGES_FOR_ROLES
 
-# Page config
 st.set_page_config(page_title="Category Management", layout="wide")
-
-# Hide built-in nav & apply global CSS
 hide_streamlit_pages_nav()
 
 # Sidebar – role‐based
@@ -30,46 +27,48 @@ supabase = init_connection()
 # Manage Categories
 st.header("Manage Categories")
 try:
-    resp       = supabase.table("categories").select("id, name, gl_account").order("name", desc=False).execute()
+    resp = (
+        supabase
+        .table("categories")
+        .select("id, name, gl_account")
+        .order("name", desc=False)
+        .execute()
+    )
     categories = resp.data
 except Exception as e:
     st.error(f"Error loading categories: {e}")
     st.stop()
 
-# Loop through categories, aligning inputs and buttons
 for cat in categories:
-    col_name, col_gl, col_actions = st.columns([4, 3, 2])
-    # Inputs side by side
+    col_name, col_gl, col_update, col_delete = st.columns([3, 3, 1, 1])
     new_name = col_name.text_input(
-        "Category Name",
-        value=cat["name"],
-        key=f"cat_name_{cat['id']}"
+        "", value=cat["name"], key=f"cat_name_{cat['id']}"
     )
     new_gl = col_gl.text_input(
-        "GL Account",
-        value=cat.get("gl_account", ""),
-        key=f"cat_gl_{cat['id']}"
+        "", value=cat.get("gl_account", ""), key=f"cat_gl_{cat['id']}"
     )
-    # Buttons aligned in a sub‐column
-    with col_actions:
-        btn_update, btn_delete = st.columns([1, 1], gap="small")
-        if btn_update.button("Update", key=f"update_cat_{cat['id']}"):
-            try:
-                supabase.table("categories") \
-                        .update({"name": new_name, "gl_account": new_gl}) \
-                        .eq("id", cat["id"]) \
-                        .execute()
-                st.success(f"Updated '{cat['name']}' → '{new_name}'.")
-                st.experimental_rerun()
-            except Exception as ex:
-                st.error(f"Error updating category: {ex}")
-        if btn_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
-            try:
-                supabase.table("categories").delete().eq("id", cat["id"]).execute()
-                st.success(f"Deleted category '{cat['name']}'.")
-                st.experimental_rerun()
-            except Exception as ex:
-                st.error(f"Error deleting category: {ex}")
+
+    # Spacer to vertically center buttons
+    col_update.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    if col_update.button("Update", key=f"update_cat_{cat['id']}"):
+        try:
+            supabase.table("categories") \
+                    .update({"name": new_name, "gl_account": new_gl}) \
+                    .eq("id", cat["id"]) \
+                    .execute()
+            st.success(f"Updated '{cat['name']}' → '{new_name}'.")
+            st.experimental_rerun()
+        except Exception as ex:
+            st.error(f"Error updating category: {ex}")
+
+    col_delete.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    if col_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
+        try:
+            supabase.table("categories").delete().eq("id", cat["id"]).execute()
+            st.success(f"Deleted category '{cat['name']}'.")
+            st.experimental_rerun()
+        except Exception as ex:
+            st.error(f"Error deleting category: {ex}")
 
 st.markdown("---")
 
@@ -84,6 +83,7 @@ else:
     user_labels    = [f"{u['name']} ({u['username']})" for u in users]
     sel_user_label = st.selectbox("Select User", options=user_labels, key="assign_user")
     sel_user       = users[user_labels.index(sel_user_label)]
+
     cat_labels     = [c["name"] for c in categories]
     sel_cat_name   = st.selectbox("Select Default Category", options=cat_labels, key="assign_cat")
     sel_cat_id     = next(c["id"] for c in categories if c["name"] == sel_cat_name)
