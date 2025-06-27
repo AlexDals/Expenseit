@@ -1,20 +1,61 @@
 # File: pages/9_Category_Management.py
 
 import streamlit as st
-from utils.supabase_utils import init_connection, get_all_categories, get_all_users, get_single_user_details, update_user_details
+from utils.supabase_utils import init_connection, get_all_users, get_single_user_details, update_user_details
 from utils.ui_utils import hide_streamlit_pages_nav
 from utils.nav_utils import PAGES_FOR_ROLES
 
-# *First thing* on the page:
-hide_streamlit_pages_nav()  # :contentReference[oaicite:13]{index=13}
-
+# Page config
 st.set_page_config(page_title="Category Management", layout="wide")
-supabase = init_connection()
 
-# --- Sidebar Navigation (role-based) ---
+# Inject custom CSS for a more professional, aligned layout
+st.markdown("""
+    <style>
+    /* Reduce spacing between elements */
+    .block-container .css-12oz5g7.e16nr0p32 {
+        padding-top: 0.5rem;
+        padding-bottom: 0.5rem;
+    }
+    /* Style headers */
+    h1, h2, h3, .stMarkdown h1, .stMarkdown h2 {
+        color: #004b8d;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        margin-bottom: 0.75rem;
+    }
+    /* Inputs full width */
+    .stTextInput>div>div>input,
+    .stNumberInput>div>div>input,
+    .stSelectbox>div>div>div>select {
+        width: 100% !important;
+        padding: 0.5rem !important;
+        border-radius: 4px !important;
+        border: 1px solid #ccc !important;
+    }
+    /* Button styling */
+    .stButton>button {
+        background-color: #004b8d !important;
+        color: white !important;
+        border-radius: 4px !important;
+        padding: 0.5rem 1rem !important;
+        font-weight: 500 !important;
+    }
+    .stButton>button:hover {
+        background-color: #003366 !important;
+    }
+    /* Align columns and reduce gutter */
+    .css-k1vhr4.egzxvld1 {
+        gap: 1rem !important;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# Hide Streamlit’s built-in multipage nav
+hide_streamlit_pages_nav()
+
+# --- Sidebar Navigation (role‐based) ---
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
-for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  # :contentReference[oaicite:14]{index=14}
+for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
     if fname in ("7_Add_User.py", "8_Edit_User.py"):
         continue
     if st.sidebar.button(label):
@@ -24,6 +65,9 @@ for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  #
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
+
+# Initialize Supabase client
+supabase = init_connection()
 
 # --- 1) CATEGORY CRUD ---
 st.header("Manage Categories")
@@ -41,8 +85,9 @@ except Exception as e:
 
 for cat in categories:
     col1, col2, col3 = st.columns([4,1,1])
+    # Aligned inputs
     new_name = col1.text_input("", value=cat["name"], key=f"cat_name_{cat['id']}")
-    new_gl   = col1.text_input("", value=cat.get("gl_account",""), key=f"cat_gl_{cat['id']}")
+    new_gl   = col1.text_input("GL Account", value=cat.get("gl_account",""), key=f"cat_gl_{cat['id']}")
     if col2.button("Update", key=f"update_cat_{cat['id']}"):
         try:
             supabase.table("categories") \
@@ -64,21 +109,7 @@ for cat in categories:
         except Exception as e:
             st.error(f"Error deleting category: {e}")
 
-st.subheader("Add New Category")
-new_cat = st.text_input("Name", key="new_cat_name")
-new_gl  = st.text_input("GL Account Number", key="new_cat_gl")
-if st.button("Add Category"):
-    if not new_cat:
-        st.error("Enter a category name.")
-    else:
-        try:
-            supabase.table("categories").insert({"name": new_cat, "gl_account": new_gl}).execute()
-            st.success(f"Added category '{new_cat}'.")
-            st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Error adding category: {e}")
-
-st.write("---")
+st.markdown("---")
 
 # --- 2) ASSIGN DEFAULT CATEGORY TO USER ---
 st.header("Assign Default Category to User")
@@ -110,4 +141,4 @@ else:
             else:
                 st.error("Failed to update user. Check the logs.")
         except Exception as e:
-            st.error(f"Error assigning default category: {e}")  # :contentReference[oaicite:15]{index=15}
+            st.error(f"Error assigning default category: {e}")
