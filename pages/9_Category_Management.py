@@ -5,10 +5,11 @@ from utils.supabase_utils import init_connection, get_all_users, get_single_user
 from utils.ui_utils import hide_streamlit_pages_nav
 from utils.nav_utils import PAGES_FOR_ROLES
 
+# Page setup
 st.set_page_config(page_title="Category Management", layout="wide")
 hide_streamlit_pages_nav()
 
-# Sidebar – role‐based
+# Sidebar – role‐based nav
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
@@ -24,16 +25,10 @@ if not st.session_state.get("authentication_status"):
 
 supabase = init_connection()
 
-# Manage Categories
+# --- 1) CATEGORY CRUD ---
 st.header("Manage Categories")
 try:
-    resp = (
-        supabase
-        .table("categories")
-        .select("id, name, gl_account")
-        .order("name", desc=False)
-        .execute()
-    )
+    resp       = supabase.table("categories").select("id, name, gl_account").order("name", desc=False).execute()
     categories = resp.data
 except Exception as e:
     st.error(f"Error loading categories: {e}")
@@ -41,28 +36,42 @@ except Exception as e:
 
 for cat in categories:
     col_name, col_gl, col_update, col_delete = st.columns([3, 3, 1, 1])
-    new_name = col_name.text_input(
-        "", value=cat["name"], key=f"cat_name_{cat['id']}"
-    )
-    new_gl = col_gl.text_input(
-        "", value=cat.get("gl_account", ""), key=f"cat_gl_{cat['id']}"
-    )
+    new_name = col_name.text_input("Category Name", value=cat["name"], key=f"cat_name_{cat['id']}")
+    new_gl   = col_gl.text_input  ("GL Account",     value=cat.get("gl_account",""), key=f"cat_gl_{cat['id']}")
 
-    # Spacer to vertically center buttons
-    col_update.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    # Update button
     if col_update.button("Update", key=f"update_cat_{cat['id']}"):
         try:
             supabase.table("categories") \
                     .update({"name": new_name, "gl_account": new_gl}) \
                     .eq("id", cat["id"]) \
                     .execute()
-            st.success(f"Updated '{cat['name']}' → '{new_name}'.")
+            st.success(f"Updated '{cat['name']}' → '{new_name}' (GL {new_gl}).")
             st.experimental_rerun()
         except Exception as ex:
             st.error(f"Error updating category: {ex}")
 
-    col_delete.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    # Delete button with dependency checks
     if col_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
+        # 1) Used in any expense items?
+        used = supabase.table("expenses") \
+                       .select("id", count="exact") \
+                       .eq("category_id", cat["id"]) \
+                       .execute().count
+        if used > 0:
+            st.error("Cannot delete: this category has been used in expense items.")
+            continue
+
+        # 2) Assigned as default to any user?
+        assigned = supabase.table("users") \
+                           .select("id", count="exact") \
+                           .eq("default_category_id", cat["id"]) \
+                           .execute().count
+        if assigned > 0:
+            st.error("Cannot delete: this category is the default for one or more users.")
+            continue
+
+        # Safe to delete
         try:
             supabase.table("categories").delete().eq("id", cat["id"]).execute()
             st.success(f"Deleted category '{cat['name']}'.")
@@ -72,7 +81,7 @@ for cat in categories:
 
 st.markdown("---")
 
-# Assign Default Category
+# --- 2) ASSIGN DEFAULT CATEGORY TO USER ---
 st.header("Assign Default Category to User")
 users_df = get_all_users()
 users    = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
