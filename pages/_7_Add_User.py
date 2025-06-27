@@ -3,6 +3,12 @@
 import streamlit as st
 import bcrypt
 from utils.supabase_utils import init_connection, get_all_approvers
+from utils.ui_utils import hide_streamlit_pages_nav
+
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="Login", layout="wide")
 
 st.set_page_config(page_title="Add User", layout="centered")
 st.title("Add User")
