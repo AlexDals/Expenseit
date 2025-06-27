@@ -8,10 +8,10 @@ from utils.nav_utils import PAGES_FOR_ROLES
 # Page config
 st.set_page_config(page_title="Department Maintenance", layout="wide")
 
-# Hide built-in nav and apply global CSS
+# Hide built-in nav & apply global CSS
 hide_streamlit_pages_nav()
 
-# --- Sidebar Navigation (role-based) ---
+# Sidebar – role‐based
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
@@ -20,15 +20,14 @@ for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
     if st.sidebar.button(label):
         st.switch_page(f"pages/{fname}")
 
-# --- Authentication Guard ---
+# Auth guard
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
 
-# Initialize Supabase
 supabase = init_connection()
 
-# --- Manage Departments ---
+# Manage Departments
 st.header("Manage Departments")
 try:
     deps = supabase.table("departments").select("*").order("name", desc=False).execute().data
@@ -41,35 +40,36 @@ except Exception as e:
         st.error(f"Error loading departments: {e}")
         st.stop()
 
-# Display each department in a row of 4 columns:
-# [Department Name] [Update] [Delete] [Spacer]
+# Loop through departments, aligning inputs and buttons
 for dep in deps:
-    col_name, col_update, col_delete, _ = st.columns([4, 1, 1, 1])
+    col_name, col_actions = st.columns([5, 3])
+    # Department name input
     new_name = col_name.text_input(
         "Department Name",
         value=dep["name"],
         key=f"dep_name_{dep['id']}"
     )
-
-    if col_update.button("Update", key=f"update_dep_{dep['id']}"):
-        try:
-            supabase.table("departments").update({"name": new_name}).eq("id", dep["id"]).execute()
-            st.success(f"Renamed '{dep['name']}' → '{new_name}'.")
-            st.experimental_rerun()
-        except Exception as ex:
-            st.error(f"Error updating department: {ex}")
-
-    if col_delete.button("Delete", key=f"delete_dep_{dep['id']}"):
-        try:
-            supabase.table("departments").delete().eq("id", dep["id"]).execute()
-            st.success(f"Deleted department '{dep['name']}'.")
-            st.experimental_rerun()
-        except Exception as ex:
-            st.error(f"Error deleting department: {ex}")
+    # Buttons in sub‐columns
+    with col_actions:
+        btn_update, btn_delete = st.columns([1, 1], gap="small")
+        if btn_update.button("Update", key=f"update_dep_{dep['id']}"):
+            try:
+                supabase.table("departments").update({"name": new_name}).eq("id", dep["id"]).execute()
+                st.success(f"Renamed '{dep['name']}' → '{new_name}'.")
+                st.experimental_rerun()
+            except Exception as ex:
+                st.error(f"Error updating department: {ex}")
+        if btn_delete.button("Delete", key=f"delete_dep_{dep['id']}"):
+            try:
+                supabase.table("departments").delete().eq("id", dep["id"]).execute()
+                st.success(f"Deleted department '{dep['name']}'.")
+                st.experimental_rerun()
+            except Exception as ex:
+                st.error(f"Error deleting department: {ex}")
 
 st.markdown("---")
 
-# --- Add New Department ---
+# Add New Department
 st.subheader("Add New Department")
 new_dep = st.text_input("Name", key="new_dep_name")
 if st.button("Add Department"):
@@ -77,7 +77,6 @@ if st.button("Add Department"):
         st.error("Enter a department name.")
     else:
         try:
-            # Check for duplicate
             dup = supabase.table("departments").select("id", count="exact").eq("name", new_dep).execute()
             if dup.count > 0:
                 st.error(f"A department named '{new_dep}' already exists.")
