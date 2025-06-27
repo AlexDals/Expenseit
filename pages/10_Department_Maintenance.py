@@ -25,9 +25,10 @@ if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
 
-# --- Main Department Maintenance Content ---
+# Initialize Supabase client
 supabase = init_connection()
 
+# --- Load Departments ---
 st.header("Manage Departments")
 try:
     deps = (
@@ -43,21 +44,38 @@ except Exception as e:
     if "relation \"public.departments\" does not exist" in msg:
         st.info(
             "No `departments` table found in your database.\n\n"
-            "Please create a table named `departments` (see the SQL snippet in the docs), then reload."
+            "Please create a table named `departments` with at least:\n"
+            "- `id` (UUID PRIMARY KEY DEFAULT uuid_generate_v4()) or BIGSERIAL\n"
+            "- `name` TEXT NOT NULL\n"
+            "- `created_at` TIMESTAMPTZ DEFAULT NOW()\n\n"
+            "Then reload this page."
         )
         st.stop()
     else:
         st.error(f"Error loading departments: {e}")
         st.stop()
 
+# --- Existing Departments (with duplicate‐safe update & delete) ---
 for dep in deps:
     col1, col2, col3 = st.columns([4, 1, 1])
     new_name = col1.text_input("", value=dep["name"], key=f"dep_name_{dep['id']}")
     if col2.button("Update", key=f"update_dep_{dep['id']}"):
         try:
-            supabase.table("departments").update({"name": new_name}).eq("id", dep["id"]).execute()
-            st.success(f"Renamed department to '{new_name}'.")
-            st.rerun()
+            # Prevent duplicate names on update
+            dup = supabase.table("departments") \
+                          .select("id", count="exact") \
+                          .eq("name", new_name) \
+                          .neq("id", dep["id"]) \
+                          .execute()
+            if dup.count > 0:
+                st.error(f"A department named '{new_name}' already exists.")
+            else:
+                supabase.table("departments") \
+                        .update({"name": new_name}) \
+                        .eq("id", dep["id"]) \
+                        .execute()
+                st.success(f"Renamed department to '{new_name}'.")
+                st.rerun()
         except Exception as ex:
             st.error(f"Error updating department: {ex}")
     if col3.button("Delete", key=f"delete_dep_{dep['id']}"):
@@ -68,6 +86,7 @@ for dep in deps:
         except Exception as ex:
             st.error(f"Error deleting department: {ex}")
 
+# --- Add New Department (with duplicate check) ---
 st.subheader("Add New Department")
 new_dep = st.text_input("Name", key="new_dep_name")
 if st.button("Add Department"):
@@ -75,8 +94,19 @@ if st.button("Add Department"):
         st.error("Enter a department name.")
     else:
         try:
-            supabase.table("departments").insert({"name": new_dep}).execute()
-            st.success(f"Added department '{new_dep}'.")
-            st.rerun()
+            # Prevent duplicate names on insert
+            dup = supabase.table("departments") \
+                          .select("id", count="exact") \
+                          .eq("name", new_dep) \
+                          .execute()
+            if dup.count > 0:
+                st.error(f"A department named '{new_dep}' already exists.")
+            else:
+                supabase.table("departments").insert({"name": new_dep}).execute()
+                st.success(f"Added department '{new_dep}'.")
+                st.rerun()
         except Exception as ex:
-            st.error(f"Error adding department: {ex}")
+            if "relation \"public.departments\" does not exist" in str(ex):
+                st.error("Cannot add department: `departments` table does not exist.")
+            else:
+                st.error(f"Error adding department: {ex}")
