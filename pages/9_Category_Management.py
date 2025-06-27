@@ -8,51 +8,10 @@ from utils.nav_utils import PAGES_FOR_ROLES
 # Page config
 st.set_page_config(page_title="Category Management", layout="wide")
 
-# Inject custom CSS for a more professional, aligned layout
-st.markdown("""
-    <style>
-    /* Reduce spacing between elements */
-    .block-container .css-12oz5g7.e16nr0p32 {
-        padding-top: 0.5rem;
-        padding-bottom: 0.5rem;
-    }
-    /* Style headers */
-    h1, h2, h3, .stMarkdown h1, .stMarkdown h2 {
-        color: #004b8d;
-        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
-        margin-bottom: 0.75rem;
-    }
-    /* Inputs full width */
-    .stTextInput>div>div>input,
-    .stNumberInput>div>div>input,
-    .stSelectbox>div>div>div>select {
-        width: 100% !important;
-        padding: 0.5rem !important;
-        border-radius: 4px !important;
-        border: 1px solid #ccc !important;
-    }
-    /* Button styling */
-    .stButton>button {
-        background-color: #004b8d !important;
-        color: white !important;
-        border-radius: 4px !important;
-        padding: 0.5rem 1rem !important;
-        font-weight: 500 !important;
-    }
-    .stButton>button:hover {
-        background-color: #003366 !important;
-    }
-    /* Align columns and reduce gutter */
-    .css-k1vhr4.egzxvld1 {
-        gap: 1rem !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
-
-# Hide Streamlit’s built-in multipage nav
+# Hide built-in nav and apply global CSS
 hide_streamlit_pages_nav()
 
-# --- Sidebar Navigation (role‐based) ---
+# --- Sidebar Navigation (role-based) ---
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
@@ -66,48 +25,51 @@ if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access this page.")
     st.stop()
 
-# Initialize Supabase client
+# Initialize Supabase
 supabase = init_connection()
 
 # --- 1) CATEGORY CRUD ---
 st.header("Manage Categories")
 try:
-    cat_res = (
-        supabase.table("categories")
-                 .select("id, name, gl_account")
-                 .order("name", desc=False)
-                 .execute()
-    )
-    categories = cat_res.data
+    resp       = supabase.table("categories").select("id, name, gl_account").order("name", desc=False).execute()
+    categories = resp.data
 except Exception as e:
     st.error(f"Error loading categories: {e}")
     st.stop()
 
+# Display each category in a row of 4 columns:
+# [Category Name] [GL Account] [Update] [Delete]
 for cat in categories:
-    col1, col2, col3 = st.columns([4,1,1])
-    # Aligned inputs
-    new_name = col1.text_input("", value=cat["name"], key=f"cat_name_{cat['id']}")
-    new_gl   = col1.text_input("GL Account", value=cat.get("gl_account",""), key=f"cat_gl_{cat['id']}")
-    if col2.button("Update", key=f"update_cat_{cat['id']}"):
+    col_name, col_gl, col_update, col_delete = st.columns([3, 3, 1, 1])
+    new_name = col_name.text_input(
+        "Category Name",
+        value=cat["name"],
+        key=f"cat_name_{cat['id']}"
+    )
+    new_gl = col_gl.text_input(
+        "GL Account",
+        value=cat.get("gl_account", ""),
+        key=f"cat_gl_{cat['id']}"
+    )
+
+    if col_update.button("Update", key=f"update_cat_{cat['id']}"):
         try:
             supabase.table("categories") \
                     .update({"name": new_name, "gl_account": new_gl}) \
                     .eq("id", cat["id"]) \
                     .execute()
-            st.success(f"Renamed category to '{new_name}'.")
+            st.success(f"Renamed '{cat['name']}' → '{new_name}' (GL: {new_gl}).")
             st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Error updating category: {e}")
-    if col3.button("Delete", key=f"delete_cat_{cat['id']}"):
+        except Exception as ex:
+            st.error(f"Error updating category: {ex}")
+
+    if col_delete.button("Delete", key=f"delete_cat_{cat['id']}"):
         try:
-            supabase.table("categories") \
-                    .delete() \
-                    .eq("id", cat["id"]) \
-                    .execute()
+            supabase.table("categories").delete().eq("id", cat["id"]).execute()
             st.success(f"Deleted category '{cat['name']}'.")
             st.experimental_rerun()
-        except Exception as e:
-            st.error(f"Error deleting category: {e}")
+        except Exception as ex:
+            st.error(f"Error deleting category: {ex}")
 
 st.markdown("---")
 
@@ -117,7 +79,7 @@ users_df = get_all_users()
 users    = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
 
 if not users:
-    st.info("No users found to assign.")
+    st.info("No users to assign.")
 else:
     user_labels    = [f"{u['name']} ({u['username']})" for u in users]
     sel_user_label = st.selectbox("Select User", options=user_labels, key="assign_user")
@@ -137,8 +99,8 @@ else:
                 default_category_id=sel_cat_id,
             )
             if ok:
-                st.success(f"Set default category for '{sel_user['name']}' to '{sel_cat_name}'.")
+                st.success(f"Set default category for '{sel_user['name']}' → '{sel_cat_name}'.")
             else:
-                st.error("Failed to update user. Check the logs.")
+                st.error("Failed to update user.")
         except Exception as e:
             st.error(f"Error assigning default category: {e}")
