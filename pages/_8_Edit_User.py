@@ -7,6 +7,12 @@ from utils.supabase_utils import (
     get_all_categories,
     get_all_approvers,
 )
+from utils.ui_utils import hide_streamlit_pages_nav
+
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="Login", layout="wide")
 
 st.set_page_config(page_title="Edit User", layout="centered")
 st.title("Edit User")
