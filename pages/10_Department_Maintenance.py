@@ -5,10 +5,7 @@ from utils.supabase_utils import init_connection
 from utils.ui_utils import hide_streamlit_pages_nav
 from utils.nav_utils import PAGES_FOR_ROLES
 
-# Page config
 st.set_page_config(page_title="Department Maintenance", layout="wide")
-
-# Hide built-in nav & apply global CSS
 hide_streamlit_pages_nav()
 
 # Sidebar – role‐based
@@ -35,41 +32,37 @@ except Exception as e:
     msg = str(e)
     if "relation \"public.departments\" does not exist" in msg:
         st.info("No `departments` table found. Please create it and reload.")
-        st.stop()
     else:
         st.error(f"Error loading departments: {e}")
-        st.stop()
+    st.stop()
 
-# Loop through departments, aligning inputs and buttons
 for dep in deps:
-    col_name, col_actions = st.columns([5, 3])
-    # Department name input
+    col_name, col_update, col_delete = st.columns([5, 1, 1])
     new_name = col_name.text_input(
-        "Department Name",
-        value=dep["name"],
-        key=f"dep_name_{dep['id']}"
+        "", value=dep["name"], key=f"dep_name_{dep['id']}"
     )
-    # Buttons in sub‐columns
-    with col_actions:
-        btn_update, btn_delete = st.columns([1, 1], gap="small")
-        if btn_update.button("Update", key=f"update_dep_{dep['id']}"):
-            try:
-                supabase.table("departments").update({"name": new_name}).eq("id", dep["id"]).execute()
-                st.success(f"Renamed '{dep['name']}' → '{new_name}'.")
-                st.experimental_rerun()
-            except Exception as ex:
-                st.error(f"Error updating department: {ex}")
-        if btn_delete.button("Delete", key=f"delete_dep_{dep['id']}"):
-            try:
-                supabase.table("departments").delete().eq("id", dep["id"]).execute()
-                st.success(f"Deleted department '{dep['name']}'.")
-                st.experimental_rerun()
-            except Exception as ex:
-                st.error(f"Error deleting department: {ex}")
+
+    # Spacer to vertically center buttons
+    col_update.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    if col_update.button("Update", key=f"update_dep_{dep['id']}"):
+        try:
+            supabase.table("departments").update({"name": new_name}).eq("id", dep["id"]).execute()
+            st.success(f"Renamed '{dep['name']}' → '{new_name}'.")
+            st.experimental_rerun()
+        except Exception as ex:
+            st.error(f"Error updating department: {ex}")
+
+    col_delete.markdown("<div style='height:2.5rem;'></div>", unsafe_allow_html=True)
+    if col_delete.button("Delete", key=f"delete_dep_{dep['id']}"):
+        try:
+            supabase.table("departments").delete().eq("id", dep["id"]).execute()
+            st.success(f"Deleted department '{dep['name']}'.")
+            st.experimental_rerun()
+        except Exception as ex:
+            st.error(f"Error deleting department: {ex}")
 
 st.markdown("---")
 
-# Add New Department
 st.subheader("Add New Department")
 new_dep = st.text_input("Name", key="new_dep_name")
 if st.button("Add Department"):
