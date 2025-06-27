@@ -2,26 +2,39 @@
 
 import streamlit as st
 from utils import supabase_utils as su
-import pandas as pd
+from utils.nav_utils import PAGES_FOR_ROLES
 from utils.ui_utils import hide_streamlit_pages_nav
 
-# *First thing* on the page:
+# Hide Streamlit’s built-in pages nav immediately
 hide_streamlit_pages_nav()
 
-st.set_page_config(page_title="Login", layout="wide")
+# --- Sidebar Navigation (role‐based) ---
+role = st.session_state.get("role", "logged_out")
+st.sidebar.header("Navigation")
+for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
+    # Skip “hidden” pages prefixed with underscore
+    if fname.startswith("_"):
+        continue
+    if st.sidebar.button(label):
+        st.switch_page(f"pages/{fname}")  # same pattern as in app.py :contentReference[oaicite:3]{index=3}
+
+# Page configuration
+st.set_page_config(page_title="Dashboard", layout="wide")
+
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access the dashboard.")
     st.stop()
 
 # --- Retrieve authenticator and user info from session state ---
-authenticator = st.session_state.get('authenticator')
-user_id       = st.session_state.get('user_id')
+user_id = st.session_state.get("user_id")
 if not user_id:
     st.error("User profile not found in session.")
     st.stop()
 
+# Main dashboard content
 st.subheader("Your Dashboard")
+
 try:
     user_reports_df = su.get_reports_for_user(user_id)
     if not user_reports_df.empty:
@@ -29,7 +42,8 @@ try:
         with col1:
             st.metric("Total Reports Submitted", len(user_reports_df))
         with col2:
-            st.metric("Total Expenses Claimed", f"${user_reports_df['total_amount'].sum():,.2f}")
+            total_amount = user_reports_df["total_amount"].sum()
+            st.metric("Total Expenses Claimed", f"${total_amount:,.2f}")
     else:
         st.info("No reports submitted yet. Go to 'New Report' to create one!")
 except Exception as e:
