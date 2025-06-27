@@ -5,34 +5,32 @@ from utils import supabase_utils as su
 from utils.nav_utils import PAGES_FOR_ROLES
 from utils.ui_utils import hide_streamlit_pages_nav
 
-# Hide Streamlit’s built-in pages nav immediately
+# Page config must come first
+st.set_page_config(page_title="Dashboard", layout="wide")
+
+# Hide Streamlit’s built-in multipage nav
 hide_streamlit_pages_nav()
 
 # --- Sidebar Navigation (role‐based) ---
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
-    # Skip “hidden” pages prefixed with underscore
     if fname.startswith("_"):
         continue
     if st.sidebar.button(label):
-        st.switch_page(f"pages/{fname}")  # same pattern as in app.py :contentReference[oaicite:3]{index=3}
-
-# Page configuration
-st.set_page_config(page_title="Dashboard", layout="wide")
+        st.switch_page(f"pages/{fname}")
 
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access the dashboard.")
     st.stop()
 
-# --- Retrieve authenticator and user info from session state ---
 user_id = st.session_state.get("user_id")
 if not user_id:
     st.error("User profile not found in session.")
     st.stop()
 
-# Main dashboard content
+# --- Main Dashboard Content ---
 st.subheader("Your Dashboard")
 
 try:
