@@ -83,23 +83,19 @@ for _, row in df.iterrows():
     vendor = row["vendor"]
     with st.expander(f"{date} – {vendor}"):
         raw_li = row.get("line_items")
-        # If no line_items field or empty
         if not raw_li:
             st.write("No line items")
             continue
-        # Parse JSON string into Python list
         if isinstance(raw_li, str):
             try:
                 raw_li = json.loads(raw_li)
             except Exception:
                 st.error("Could not parse line_items JSON")
                 continue
-        # Ensure we have a non-empty list
         if not isinstance(raw_li, list) or len(raw_li) == 0:
             st.write("No line items")
             continue
 
-        # Build DataFrame of line items
         li_df = pd.DataFrame(raw_li)
         cats = su.get_all_categories()
         cmap = {c["id"]: {"name": c["name"], "gl": c.get("gl_account", "")} for c in cats}
@@ -114,6 +110,7 @@ for _, row in df.iterrows():
 # --- Export Options ---
 col_download_excel, col_download_zip = st.columns(2)
 
+# Excel export
 with col_download_excel:
     if st.button("Download as Excel"):
         to_excel = io.BytesIO()
@@ -138,29 +135,31 @@ with col_download_excel:
         to_excel.seek(0)
         st.download_button(
             label="Download .xlsx",
-            data=to_excel,
-            file_name=f"{report['report_name'].replace(' ', '_')}.xlsx"
+            data=to_excel.getvalue(),
+            file_name=f"{report['report_name'].replace(' ', '_')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
+# ZIP receipts export
 with col_download_zip:
-    if st.button("Download Receipts (ZIP)"):
-        supabase = su.init_connection()
-        receipt_paths = df["receipt_path"].dropna().unique().tolist()
-        if not receipt_paths:
-            st.error("No receipts uploaded for this report.")
-        else:
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w") as zf:
-                for path in receipt_paths:
-                    try:
-                        content = supabase.storage.from_("receipts").download(path)
-                        filename = os.path.basename(path)
-                        zf.writestr(filename, content)
-                    except Exception as ex:
-                        st.warning(f"Could not include '{path}': {ex}")
-            zip_buffer.seek(0)
-            st.download_button(
-                label="Download Receipts ZIP",
-                data=zip_buffer,
-                file_name=f"{report['report_name'].replace(' ', '_')}_receipts.zip"
-            )
+    supabase_client = su.init_connection()
+    receipt_paths = df["receipt_path"].dropna().unique().tolist()
+    if not receipt_paths:
+        st.error("No receipts uploaded for this report.")
+    else:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            for path in receipt_paths:
+                try:
+                    content = supabase_client.storage.from_("receipts").download(path)
+                    filename = os.path.basename(path)
+                    zf.writestr(filename, content)
+                except Exception as ex:
+                    st.warning(f"Could not include '{path}': {ex}")
+        zip_buffer.seek(0)
+        st.download_button(
+            label="Download Receipts ZIP",
+            data=zip_buffer.getvalue(),
+            file_name=f"{report['report_name'].replace(' ', '_')}_receipts.zip",
+            mime="application/zip"
+        )
