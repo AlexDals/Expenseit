@@ -1,14 +1,18 @@
+# File: pages/_7_Add_User.py
+
 import streamlit as st
-from utils.nav_utils import filter_pages_by_role
-filter_pages_by_role()
+from utils.supabase_utils import init_connection, get_all_approvers, get_all_categories
+from utils.ui_utils import hide_streamlit_pages_nav
+
+# *First thing* on the page:
+hide_streamlit_pages_nav()
 
 import bcrypt
-from utils.supabase_utils import init_connection, get_all_approvers, get_all_categories
 
-st.set_page_config(layout="centered", page_title="Add User")
+st.set_page_config(page_title="Add User", layout="wide")
 st.title("Add User")
 
-supabase = init_connection()
+supabase  = init_connection()
 approvers = get_all_approvers()
 cats      = get_all_categories()
 
@@ -28,14 +32,16 @@ if st.button("Create User"):
         salt  = bcrypt.gensalt()
         hsh   = bcrypt.hashpw(pwd_b, salt).decode("utf-8")
         new_u = {
-            "username": username, "name": name, "email": email,
+            "username": username,
+            "name": name,
+            "email": email,
             "role": role,
-            "approver_id": next(a["id"] for a in approvers if a["name"]==approver),
-            "default_category_id": next(c["id"] for c in cats if c["name"]==category),
-            "password": hsh
+            "approver_id": next(a["id"] for a in approvers if a["name"] == approver),
+            "default_category_id": next(c["id"] for c in cats if c["name"] == category),
+            "password": hsh,
         }
         res = supabase.table("users").insert(new_u).execute()
-        if res.error:
+        if getattr(res, "error", None):
             st.error(f"Error: {res.error.message}")
         else:
             st.success("User created.")
