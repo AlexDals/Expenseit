@@ -1,24 +1,32 @@
 # File: pages/9_Category_Management.py
 
 import streamlit as st
-from utils.supabase_utils import (
-    init_connection,
-    get_all_categories,
-    get_all_users,
-    get_single_user_details,
-    update_user_details,
-)
+from utils.supabase_utils import init_connection, get_all_categories, get_all_users, get_single_user_details, update_user_details
 from utils.ui_utils import hide_streamlit_pages_nav
+from utils.nav_utils import PAGES_FOR_ROLES
 
 # *First thing* on the page:
-hide_streamlit_pages_nav()
+hide_streamlit_pages_nav()  # :contentReference[oaicite:13]{index=13}
 
 st.set_page_config(page_title="Category Management", layout="wide")
 supabase = init_connection()
 
+# --- Sidebar Navigation (role-based) ---
+role = st.session_state.get("role", "logged_out")
+st.sidebar.header("Navigation")
+for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  # :contentReference[oaicite:14]{index=14}
+    if fname in ("7_Add_User.py", "8_Edit_User.py"):
+        continue
+    if st.sidebar.button(label):
+        st.switch_page(f"pages/{fname}")
+
+# --- Authentication Guard ---
+if not st.session_state.get("authentication_status"):
+    st.warning("Please log in to access this page.")
+    st.stop()
+
 # --- 1) CATEGORY CRUD ---
 st.header("Manage Categories")
-
 try:
     cat_res = (
         supabase.table("categories")
@@ -74,20 +82,19 @@ st.write("---")
 
 # --- 2) ASSIGN DEFAULT CATEGORY TO USER ---
 st.header("Assign Default Category to User")
-
 users_df = get_all_users()
-users = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
+users    = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
 
 if not users:
     st.info("No users found to assign.")
 else:
-    user_labels = [f"{u['name']} ({u['username']})" for u in users]
+    user_labels    = [f"{u['name']} ({u['username']})" for u in users]
     sel_user_label = st.selectbox("Select User", options=user_labels, key="assign_user")
-    sel_user = users[user_labels.index(sel_user_label)]
+    sel_user       = users[user_labels.index(sel_user_label)]
 
-    cat_labels = [c["name"] for c in categories]
-    sel_cat_name = st.selectbox("Select Default Category", options=cat_labels, key="assign_cat")
-    sel_cat_id = next(c["id"] for c in categories if c["name"] == sel_cat_name)
+    cat_labels     = [c["name"] for c in categories]
+    sel_cat_name   = st.selectbox("Select Default Category", options=cat_labels, key="assign_cat")
+    sel_cat_id     = next(c["id"] for c in categories if c["name"] == sel_cat_name)
 
     if st.button("Assign Default Category"):
         try:
@@ -103,4 +110,4 @@ else:
             else:
                 st.error("Failed to update user. Check the logs.")
         except Exception as e:
-            st.error(f"Error assigning default category: {e}")
+            st.error(f"Error assigning default category: {e}")  # :contentReference[oaicite:15]{index=15}
