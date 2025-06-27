@@ -36,17 +36,51 @@ if st.session_state.get("authentication_status"):
 # --- PROGRAMMATIC NAVIGATION ---
 is_logged_in = st.session_state.get("authentication_status")
 user_role = st.session_state.get("role")
+role = st.session_state.get("role", "logged_out")
+pages = PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"])
+
+st.sidebar.header("Navigation")
+for label, fname in pages:
+    # hide any file starting with "_" 
+    if fname.startswith("_"):
+        continue
+    if st.sidebar.button(label):
+        st.switch_page(f"pages/{fname}")
 
 
 
 
 # Build the navigation dictionary based on role
+# app.py (or wherever you kept it)
+
+# Map roles to a list of (label, filename) tuples
 PAGES_FOR_ROLES = {
-    "admin": [dashboard_page, new_report_page, view_reports_page, users_page, category_management_page, add_user_page, edit_user_page],
-    "approver": [dashboard_page, new_report_page, view_reports_page],
-    "user": [dashboard_page, new_report_page, view_reports_page],
-    "logged_out": [login_page, register_page]
+    "admin": [
+        ("Dashboard",             "2_Dashboard.py"),
+        ("New Report",            "3_New_Report.py"),
+        ("View Reports",          "4_View_Reports.py"),
+        ("User Management",       "6_Users.py"),
+        ("Category Management",   "9_Category_Management.py"),
+        # these are hidden in the sidebar because of the leading "_"
+        ("Add User",              "_7_Add_User.py"),
+        ("Edit User",             "_8_Edit_User.py"),
+    ],
+    "approver": [
+        ("Dashboard",   "2_Dashboard.py"),
+        ("New Report",  "3_New_Report.py"),
+        ("View Reports","4_View_Reports.py"),
+    ],
+    "user": [
+        ("Dashboard",   "2_Dashboard.py"),
+        ("New Report",  "3_New_Report.py"),
+        ("View Reports","4_View_Reports.py"),
+    ],
+    "logged_out": [
+        ("Login",    "1_Login.py"),
+        ("Register", "5_Register.py"),
+    ],
 }
+
 
 # Select the correct list of pages
 if is_logged_in:
