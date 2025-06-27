@@ -14,7 +14,7 @@ st.set_page_config(page_title="User Management", layout="wide")
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  # :contentReference[oaicite:11]{index=11}
-    if fname in ("_7_Add_User.py", "8_Edit_User.py"):
+    if fname in ("_7_Add_User.py", "_8_Edit_User.py"):
         continue
     if st.sidebar.button(label):
         st.switch_page(f"pages/{fname}")
@@ -26,7 +26,7 @@ if not st.session_state.get("authentication_status"):
 
 # --- Main User Management Content ---
 if st.button("➕ Add User"):
-    st.switch_page("pages/7_Add_User.py")
+    st.switch_page("pages/_7_Add_User.py")
 
 users_df = get_all_users()
 users = users_df.to_dict("records") if hasattr(users_df, "to_dict") else users_df
