@@ -1,3 +1,5 @@
+# File: pages/1_Login.py
+
 import streamlit as st
 from utils import supabase_utils as su
 from streamlit_authenticator import Authenticate
@@ -26,18 +28,19 @@ if "authenticator" not in st.session_state:
 
 authenticator = st.session_state["authenticator"]
 
-# Show login form in the main container
-name, auth_status, username = authenticator.login(
-    "Login", container="main"
-)
+# Show login form in the main area (use "main" as the location name)
+name, auth_status, username = authenticator.login("Login", "main")
 
 if auth_status:
     # Store user info & redirect
-    st.session_state["name"]                   = name
-    st.session_state["username"]               = username
-    st.session_state["authentication_status"]  = True
+    st.session_state["name"]                  = name
+    st.session_state["username"]              = username
+    st.session_state["authentication_status"] = True
     st.success(f"Welcome, {name}! Redirecting…")
     st.experimental_rerun()
 
 elif auth_status is False:
     st.error("Username/password is incorrect.")
+
+elif auth_status is None:
+    st.warning("Please enter your username and password.")
