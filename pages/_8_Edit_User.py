@@ -1,7 +1,6 @@
-import streamlit as st
-from utils.nav_utils import filter_pages_by_role
-filter_pages_by_role()
+# File: pages/_8_Edit_User.py
 
+import streamlit as st
 from utils.supabase_utils import (
     init_connection,
     get_single_user_details,
@@ -9,8 +8,12 @@ from utils.supabase_utils import (
     get_all_categories,
     get_all_approvers,
 )
+from utils.ui_utils import hide_streamlit_pages_nav
 
-st.set_page_config(layout="wide", page_title="Edit User")
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="Edit User", layout="wide")
 st.title("Edit User")
 
 supabase = init_connection()
@@ -23,8 +26,8 @@ details   = get_single_user_details(uid)
 approvers = get_all_approvers()
 cats      = get_all_categories()
 
-name     = st.text_input("Full Name", value=details.get("name",""))
-email    = st.text_input("Email", value=details.get("email",""))
+name     = st.text_input("Full Name", value=details.get("name", ""))
+email    = st.text_input("Email", value=details.get("email", ""))
 role     = st.selectbox("Role", ["user","approver","admin"], index=["user","approver","admin"].index(details.get("role","user")))
 approver = st.selectbox("Approver", [a["name"] for a in approvers], index=[a["id"] for a in approvers].index(details.get("approver_id")))
 category = st.selectbox("Default Category", [c["name"] for c in cats], index=[c["id"] for c in cats].index(details.get("default_category_id")))
@@ -33,8 +36,8 @@ if st.button("Save changes"):
     success = update_user_details(
         uid,
         role=role,
-        approver_id=approvers[approver]["id"],
-        default_category_id=cats[category]["id"]
+        approver_id=next(a["id"] for a in approvers if a["name"] == approver),
+        default_category_id=next(c["id"] for c in cats if c["name"] == category),
     )
     if success:
         st.success("User updated.")
