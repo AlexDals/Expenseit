@@ -14,7 +14,7 @@ st.set_page_config(page_title="User Management", layout="wide")
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  # :contentReference[oaicite:11]{index=11}
-    if fname in ("7_Add_User.py", "8_Edit_User.py"):
+    if fname in ("_7_Add_User.py", "8_Edit_User.py"):
         continue
     if st.sidebar.button(label):
         st.switch_page(f"pages/{fname}")
@@ -38,5 +38,5 @@ else:
         c1, c2 = st.columns([4,1])
         if c1.button(f"✏️ {u['name']} (`{u['username']}`)", key=f"edit_{u['id']}"):
             st.session_state["selected_user_id"] = u["id"]
-            st.switch_page("pages/8_Edit_User.py")
+            st.switch_page("pages/_8_Edit_User.py")
         c2.markdown(f"**Role:** `{u.get('role', '')}`")  # :contentReference[oaicite:12]{index=12}
