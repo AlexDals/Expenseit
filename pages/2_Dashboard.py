@@ -1,7 +1,12 @@
 import streamlit as st
 from utils import supabase_utils as su
 import pandas as pd
+from utils.ui_utils import hide_streamlit_pages_nav
 
+# *First thing* on the page:
+hide_streamlit_pages_nav()
+
+st.set_page_config(page_title="Login", layout="wide")
 # --- Authentication Guard ---
 if not st.session_state.get("authentication_status"):
     st.warning("Please log in to access the dashboard.")
