@@ -2,19 +2,24 @@
 
 import streamlit as st
 from utils import supabase_utils as su
-from utils.nav_utils import PAGES_FOR_ROLES
+import pandas as pd
 from utils.ui_utils import hide_streamlit_pages_nav
+from utils.nav_utils import PAGES_FOR_ROLES  # role-based page definitions :contentReference[oaicite:3]{index=3}
 
-# Page config must come first
+# Page configuration
 st.set_page_config(page_title="Dashboard", layout="wide")
 
 # Hide Streamlit’s built-in multipage nav
-hide_streamlit_pages_nav()
+hide_streamlit_pages_nav()  # :contentReference[oaicite:4]{index=4}
 
 # --- Sidebar Navigation (role‐based) ---
 role = st.session_state.get("role", "logged_out")
 st.sidebar.header("Navigation")
 for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
+    # Never show Add User or Edit User here
+    if fname in ("7_Add_User.py", "8_Edit_User.py"):
+        continue
+    # Skip any hidden pages prefixed with underscore
     if fname.startswith("_"):
         continue
     if st.sidebar.button(label):
