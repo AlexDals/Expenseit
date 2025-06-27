@@ -1,6 +1,7 @@
 import streamlit as st
 from supabase import create_client, Client
 import pandas as pd
+import json
 from datetime import datetime
 import os
 import uuid
@@ -22,7 +23,6 @@ def init_connection() -> Client:
     except KeyError:
         st.error("Supabase credentials not found.")
         st.stop()
-
 
 # ---------------------------------------------
 # User Authentication & Management
@@ -60,14 +60,25 @@ def get_user_by_username(username: str) -> dict:
     """
     supabase = init_connection()
     try:
-        resp = (supabase.table("users")
-                .select("id, role")
-                .eq("username", username)
-                .maybe_single()
-                .execute())
+        resp = supabase.table("users").select("id, role").eq("username", username).maybe_single().execute()
         return resp.data or {}
     except Exception:
         logger.exception("Error fetching user by username")
+        return {}
+
+
+def get_single_user_details(user_id: str) -> dict:
+    """
+    Fetches full details for a single user.
+    """
+    supabase = init_connection()
+    try:
+        resp = supabase.table("users").select(
+            "id, username, name, email, role, approver_id, default_category_id"
+        ).eq("id", user_id).maybe_single().execute()
+        return resp.data or {}
+    except Exception:
+        logger.exception("Error fetching user details")
         return {}
 
 
@@ -89,13 +100,43 @@ def register_user(username: str, name: str, email: str, hashed_password: str, ro
             "name": name,
             "email": email,
             "hashed_password": hashed_password,
-            "role": role,
+            "role": role
         }).execute()
         return True
     except Exception:
         logger.exception("Error registering user")
         return False
 
+
+def update_user_details(user_id: str, role: str, approver_id: int = None, default_category_id: int = None) -> bool:
+    """
+    Update user role, approver, default_category.
+    """
+    supabase = init_connection()
+    try:
+        updates = {"role": role}
+        if approver_id is not None:
+            updates["approver_id"] = approver_id
+        if default_category_id is not None:
+            updates["default_category_id"] = default_category_id
+        supabase.table("users").update(updates).eq("id", user_id).execute()
+        return True
+    except Exception:
+        logger.exception("Error updating user details")
+        return False
+
+
+def delete_user(user_id: str) -> bool:
+    """
+    Delete a user from database.
+    """
+    supabase = init_connection()
+    try:
+        supabase.table("users").delete().eq("id", user_id).execute()
+        return True
+    except Exception:
+        logger.exception("Error deleting user")
+        return False
 
 # ---------------------------------------------
 # Category Management
@@ -107,33 +148,33 @@ def fetch_categories() -> pd.DataFrame:
     """
     supabase = init_connection()
     try:
-        resp = supabase.table("categories").select("id, name").execute()
+        resp = supabase.table("categories").select("id, name, gl_account").execute()
         return pd.DataFrame(resp.data or [])
     except Exception:
         logger.exception("Error fetching categories")
         return pd.DataFrame()
 
 
-def add_category(name: str) -> bool:
+def add_category(name: str, gl_account: str = "") -> bool:
     """
     Add a new category.
     """
     supabase = init_connection()
     try:
-        supabase.table("categories").insert({"name": name}).execute()
+        supabase.table("categories").insert({"name": name, "gl_account": gl_account}).execute()
         return True
     except Exception:
         logger.exception("Error adding category")
         return False
 
 
-def update_category(category_id: str, name: str) -> bool:
+def update_category(category_id: str, name: str, gl_account: str = "") -> bool:
     """
-    Update category name.
+    Update category.
     """
     supabase = init_connection()
     try:
-        supabase.table("categories").update({"name": name}).eq("id", category_id).execute()
+        supabase.table("categories").update({"name": name, "gl_account": gl_account}).eq("id", category_id).execute()
         return True
     except Exception:
         logger.exception("Error updating category")
@@ -142,7 +183,7 @@ def update_category(category_id: str, name: str) -> bool:
 
 def delete_category(category_id: str) -> bool:
     """
-    Delete a category by ID.
+    Delete a category.
     """
     supabase = init_connection()
     try:
@@ -151,7 +192,6 @@ def delete_category(category_id: str) -> bool:
     except Exception:
         logger.exception("Error deleting category")
         return False
-
 
 # ---------------------------------------------
 # Department Management
@@ -185,7 +225,7 @@ def add_department(name: str) -> bool:
 
 def update_department(department_id: str, name: str) -> bool:
     """
-    Update department name.
+    Update department.
     """
     supabase = init_connection()
     try:
@@ -198,7 +238,7 @@ def update_department(department_id: str, name: str) -> bool:
 
 def delete_department(department_id: str) -> bool:
     """
-    Delete a department by ID.
+    Delete a department.
     """
     supabase = init_connection()
     try:
@@ -207,7 +247,6 @@ def delete_department(department_id: str) -> bool:
     except Exception:
         logger.exception("Error deleting department")
         return False
-
 
 # ---------------------------------------------
 # Report & Expense Management
@@ -222,10 +261,10 @@ def create_report(username: str, report_name: str, submission_date: datetime = N
         submission_date = submission_date or datetime.utcnow()
         resp = supabase.table("reports").insert({
             "username": username,
-            "name": report_name,
-            "submitted_at": submission_date,
+            "report_name": report_name,
+            "submission_date": submission_date
         }).execute()
-        return resp.data[0]["id"]  # type: ignore
+        return resp.data[0]["id"] if resp.data else ""
     except Exception:
         logger.exception("Error creating report")
         return ""
@@ -237,7 +276,7 @@ def fetch_reports(username: str = None) -> pd.DataFrame:
     """
     supabase = init_connection()
     try:
-        query = supabase.table("reports").select("id, username, name, submitted_at")
+        query = supabase.table("reports").select("*")
         if username:
             query = query.eq("username", username)
         resp = query.execute()
@@ -249,7 +288,7 @@ def fetch_reports(username: str = None) -> pd.DataFrame:
 
 def delete_report(report_id: str) -> bool:
     """
-    Delete a report and its line items.
+    Delete a report and its associated expense items.
     """
     supabase = init_connection()
     try:
@@ -261,7 +300,7 @@ def delete_report(report_id: str) -> bool:
         return False
 
 
-def add_expense_item(report_id: str, description: str, amount: float, date: datetime, receipt_url: str = None) -> bool:
+def add_expense_item(report_id: str, description: str, amount: float, date: datetime, receipt_url: str = None, category_id: int = None, gst_amount: float = 0.0, pst_amount: float = 0.0, hst_amount: float = 0.0, line_items: list = None) -> bool:
     """
     Add a line item to a report.
     """
@@ -273,6 +312,11 @@ def add_expense_item(report_id: str, description: str, amount: float, date: date
             "amount": amount,
             "date": date,
             "receipt_url": receipt_url,
+            "category_id": category_id,
+            "gst_amount": gst_amount,
+            "pst_amount": pst_amount,
+            "hst_amount": hst_amount,
+            "line_items": json.dumps(line_items) if line_items else None
         }).execute()
         return True
     except Exception:
@@ -286,8 +330,15 @@ def fetch_expense_items(report_id: str) -> pd.DataFrame:
     """
     supabase = init_connection()
     try:
-        resp = supabase.table("expense_items").select("id, description, amount, date, receipt_url").eq("report_id", report_id).execute()
-        return pd.DataFrame(resp.data or [])
+        resp = supabase.table("expense_items").select("*").eq("report_id", report_id).execute()
+        items = resp.data or []
+        for item in items:
+            if item.get("line_items") and isinstance(item["line_items"], str):
+                try:
+                    item["line_items"] = json.loads(item["line_items"])
+                except json.JSONDecodeError:
+                    item["line_items"] = []
+        return pd.DataFrame(items)
     except Exception:
         logger.exception("Error fetching expense items")
         return pd.DataFrame()
@@ -299,6 +350,8 @@ def update_expense_item(item_id: str, **kwargs) -> bool:
     """
     supabase = init_connection()
     try:
+        if "line_items" in kwargs:
+            kwargs["line_items"] = json.dumps(kwargs["line_items"])
         supabase.table("expense_items").update(kwargs).eq("id", item_id).execute()
         return True
     except Exception:
@@ -318,21 +371,22 @@ def delete_expense_item(item_id: str) -> bool:
         logger.exception("Error deleting expense item")
         return False
 
-
 # ---------------------------------------------
 # Receipt Upload
 # ---------------------------------------------
 
-def upload_receipt(file_path: str, username: str) -> str:
+def upload_receipt(uploaded_file, username: str) -> str:
     """
-    Upload a receipt file and return its public URL.
+    Upload a receipt file (Streamlit UploadedFile) and return its public URL.
     """
     supabase = init_connection()
     try:
-        filename = os.path.basename(file_path)
+        content = uploaded_file.getvalue()
+        filename = os.path.basename(uploaded_file.name)
         storage_path = f"receipts/{username}/{uuid.uuid4()}_{filename}"
-        supabase.storage.from_("receipts").upload(storage_path, file_path)
-        return supabase.storage.from_("receipts").get_public_url(storage_path).public_url
+        supabase.storage.from_("receipts").upload(storage_path, content)
+        url_data = supabase.storage.from_("receipts").get_public_url(storage_path)
+        return url_data.get("publicUrl", "") if isinstance(url_data, dict) else url_data.public_url
     except Exception:
         logger.exception("Error uploading receipt")
         return ""
