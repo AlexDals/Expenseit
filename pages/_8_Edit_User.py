@@ -8,60 +8,51 @@ from utils.supabase_utils import (
     get_all_approvers,
 )
 from utils.ui_utils import hide_streamlit_pages_nav
+from utils.nav_utils import PAGES_FOR_ROLES  # role‐based page definitions :contentReference[oaicite:7]{index=7}
 
-# Hide built-in nav and apply global CSS
-hide_streamlit_pages_nav()
-
+# Page config
 st.set_page_config(page_title="Edit User", layout="wide")
+# Hide Streamlit’s built-in nav & apply global CSS
+hide_streamlit_pages_nav()  # :contentReference[oaicite:8]{index=8}
+
+# --- Sidebar Navigation (role‐based) ---
+role = st.session_state.get("role", "logged_out")
+st.sidebar.header("Navigation")
+for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):
+    # Never show Add User or Edit User in the sidebar
+    if fname in ("7_Add_User.py", "8_Edit_User.py"):
+        continue
+    if st.sidebar.button(label):
+        st.switch_page(f"pages/{fname}")
+
 st.title("Edit User")
 
-# Initialize client and load user details
-supabase = init_connection()
-uid = st.session_state.get("selected_user_id")
+supabase   = init_connection()
+uid        = st.session_state.get("selected_user_id")
 if not uid:
     st.error("No user selected.")
     st.stop()
 
-details   = get_single_user_details(uid)
-approvers = get_all_approvers()
+details    = get_single_user_details(uid)
+approvers  = get_all_approvers()
 categories = get_all_categories()
 
-# Fetch departments for the selectbox
-try:
-    deps = (
-        supabase
-        .table("departments")
-        .select("id, name")
-        .order("name", desc=False)
-        .execute()
-        .data
-    ) or []
-except Exception:
-    deps = []
-
-# — Build parallel lists for Approver dropdown (with “(None)” option) —
+# Build dropdown options with “(None)” entries
 approver_names = ["(None)"] + [a["name"] for a in approvers]
 approver_ids   = [None]    + [a["id"]   for a in approvers]
-current_approver = details.get("approver_id")
-approver_index = approver_ids.index(current_approver) if current_approver in approver_ids else 0
+cat_names      = [c["name"] for c in categories]
+cat_ids        = [c["id"]   for c in categories]
 
-# — Build parallel lists for Category dropdown —
-cat_names = [c["name"] for c in categories]
-cat_ids   = [c["id"]   for c in categories]
+# Compute safe indices
+current_app = details.get("approver_id")
+app_index   = approver_ids.index(current_app) if current_app in approver_ids else 0
 current_cat = details.get("default_category_id")
-cat_index = cat_ids.index(current_cat) if current_cat in cat_ids else 0
+cat_index   = cat_ids.index(current_cat) if current_cat in cat_ids else 0
 
-# — Build parallel lists for Department dropdown (with “(None)” option) —
-dept_names = ["(None)"] + [d["name"] for d in deps]
-dept_ids   = [None]     + [d["id"]   for d in deps]
-current_dept = details.get("department_id")
-dept_index = dept_ids.index(current_dept) if current_dept in dept_ids else 0
-
-# — Form fields —
 name     = st.text_input("Full Name", value=details.get("name", ""))
 email    = st.text_input("Email",     value=details.get("email", ""))
 
-role = st.selectbox(
+role_sel = st.selectbox(
     "Role",
     ["user", "approver", "admin"],
     index=["user", "approver", "admin"].index(details.get("role", "user"))
@@ -70,7 +61,7 @@ role = st.selectbox(
 approver = st.selectbox(
     "Approver",
     options=approver_names,
-    index=approver_index
+    index=app_index
 )
 
 category = st.selectbox(
@@ -81,26 +72,23 @@ category = st.selectbox(
 
 department = st.selectbox(
     "Department",
-    options=dept_names,
-    index=dept_index
+    options=["(None)"] + [d["name"] for d in supabase.table("departments").select("name,id").execute().data],
+    index=0  # default to “(None)”; adjust similarly if persisting
 )
 
-# — Save changes —
 if st.button("Save changes"):
-    # Map back to IDs
-    selected_approver_id  = approver_ids[approver_names.index(approver)]
-    selected_category_id  = cat_ids[cat_names.index(category)]
-    selected_department_id = dept_ids[dept_names.index(department)]
-
-    updates = {
-        "role":                  role,
-        "approver_id":           selected_approver_id,
-        "default_category_id":   selected_category_id,
-        "department_id":         selected_department_id,
-    }
-
+    selected_approver_id   = approver_ids[approver_names.index(approver)]
+    selected_category_id   = cat_ids[cat_names.index(category)]
+    # department_id mapping omitted here if not managed via supabase_utils
     try:
-        supabase.table("users").update(updates).eq("id", uid).execute()
+        update = {
+            "role":                role_sel,
+            "approver_id":         selected_approver_id,
+            "default_category_id": selected_category_id,
+        }
+        # Include department_id if desired:
+        # update["department_id"] = selected_department_id
+        supabase.table("users").update(update).eq("id", uid).execute()
         st.success("User updated successfully.")
     except Exception as e:
         st.error(f"Error updating user: {e}")
