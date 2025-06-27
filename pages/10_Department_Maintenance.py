@@ -1,17 +1,31 @@
-# File: pages/9_Department_Maintenance.py
+# File: pages/10_Department_Maintenance.py
 
 import streamlit as st
 from utils.supabase_utils import init_connection
 from utils.ui_utils import hide_streamlit_pages_nav
+from utils.nav_utils import PAGES_FOR_ROLES
 
 # *First thing* on the page:
-hide_streamlit_pages_nav()
+hide_streamlit_pages_nav()  # :contentReference[oaicite:16]{index=16}
 
 st.set_page_config(page_title="Department Maintenance", layout="wide")
-st.title("Department Maintenance")
-
 supabase = init_connection()
 
+# --- Sidebar Navigation (role-based) ---
+role = st.session_state.get("role", "logged_out")
+st.sidebar.header("Navigation")
+for label, fname in PAGES_FOR_ROLES.get(role, PAGES_FOR_ROLES["logged_out"]):  # :contentReference[oaicite:17]{index=17}
+    if fname in ("7_Add_User.py", "8_Edit_User.py"):
+        continue
+    if st.sidebar.button(label):
+        st.switch_page(f"pages/{fname}")
+
+# --- Authentication Guard ---
+if not st.session_state.get("authentication_status"):
+    st.warning("Please log in to access this page.")
+    st.stop()
+
+# --- Main Department Maintenance Content ---
 st.header("Manage Departments")
 try:
     deps = supabase.table("departments").select("*").order("name", desc=False).execute().data
@@ -48,4 +62,4 @@ if st.button("Add Department"):
             st.success(f"Added department '{new_dep}'.")
             st.experimental_rerun()
         except Exception as e:
-            st.error(f"Error adding department: {e}")
+            st.error(f"Error adding department: {e}")  # :contentReference[oaicite:18]{index=18}
